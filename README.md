@@ -6,11 +6,19 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 
 - 📅 Parses daily `.log` files in ZNC or EnergyMech format  
 - 🔎 Extracts nick activity, mentions, quotes, and last seen  
-- 💬 Tracks topics, URLs, and Discord relays  
-- 🚫 Filters non-nicks and common stopwords from mention stats  
-- ⚡ Caches per-log results for fast reprocessing  
-- 🌐 Generates a clean, single-file HTML report (`index.html`)  
-- 🧠 Intelligent random quote selection and "last seen" summaries  
+- 💬 Tracks topics, URLs, and Discord relays
+- 📝 Counts common words, smileys, and daily activity trends, showing who last used top words (excluding nicknames) and who last mentioned each nick
+- 🚫 Skips common stop words like "the" and "and" in top-word stats (extend via `IGNOREWORDS`)
+- ⚡ Caches per-log results for fast reprocessing
+- 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI, centered summary header, and color-coded activity charts
+- ⏱️ Shows overall hourly activity and stacked per-user bars to visualize when conversations happen
+- 🧠 Intelligent random quote selection and "last seen" summaries
+- 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
+- 🤖 Ignore typical Anope services (NickServ, ChanServ, etc.) and any extra bots via `BOTNICKS` so automated chatter doesn't skew stats
+- 🔁 Merge alternate nick spellings via `NICKALIASES` so renamed users share stats
+- 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time (action counts only include `/me` commands)
+- 🤬 Optional [`profanity-check`](https://pypi.org/project/profanity-check/) integration for smarter foul-language stats
+- ⚙️ Optional config file (`pisg`-style) to define bot lists, nick aliases (including wildcards), genders, ignored nicks, bridge bots, and extra stop words
 
 ## Example Stats Output
 
@@ -23,7 +31,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 ## Requirements
 
 - Python 3.8+
-- No external dependencies
+- Optional: [`profanity-check`](https://pypi.org/project/profanity-check/) for profanity detection
 
 ## Usage
 
@@ -34,6 +42,47 @@ cd pyircstats
 
 # Run it on your log directory
 python3 ircstats.py /path/to/your/logs/
+
+# or provide a config file with bot lists, aliases, genders, etc.
+python3 ircstats.py /path/to/your/logs/ myconfig.cfg
+
+# with bridge bots (comma-separated)
+BRIDGENICKS=matrixbridge,discordbot python3 ircstats.py /path/to/your/logs/
+
+# ignore additional bot accounts (Anope services are skipped by default)
+BOTNICKS=SomeBot python3 ircstats.py /path/to/your/logs/
+
+# ignore additional common words
+IGNOREWORDS=foo,bar python3 ircstats.py /path/to/your/logs/
+
+# merge nick aliases
+NICKALIASES=rc=rustycloud,rusty_=rustycloud python3 ircstats.py /path/to/your/logs/
+```
+
+### Sample config file
+
+```ini
+[bots]
+# additional bots beyond default services
+nicks = SomeBot
+
+[aliases]
+# map all variants to a canonical nick; wildcards are allowed
+rustycloud = rc rusty_ rusty*
+
+[ignore]
+nicks = badguy,spammer,spam*
+
+[ignorewords]
+words = foo,bar
+
+[bridge]
+nicks = matrixbridge,discordbot
+
+[users]
+rustycloud = male
+alice = female
+somebot* = bot
 ```
 
 This will:
@@ -64,7 +113,6 @@ Supported formats include:
 
 - Export CSV/JSON summaries
 - Per-user stat pages
-- Tagging known bots
 - Docker support
 
 ## License

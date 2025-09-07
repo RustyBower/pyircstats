@@ -6,21 +6,396 @@ import time
 import datetime
 import json
 import random
+import os
+import unicodedata
 from pathlib import Path
 from collections import defaultdict, Counter
 import html
+import fnmatch
 
 # Regex patterns for log formats
 LOG_LINE_RE_OLD = re.compile(r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s+<(?P<nick>[^>]+)>\s(?P<msg>.*)$")
 LOG_LINE_RE_NEW = re.compile(r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s+<(?P<nick>[^>]+)>\s(?P<msg>.*)$")
-TOPIC_SET_RE = re.compile(
-    r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<setter>\S+)\sset the topic to\s\[(?P<topic>.+)\]$"
+LOG_ACTION_RE_OLD = re.compile(r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<nick>\S+)\s(?P<msg>.*)$")
+LOG_ACTION_RE_NEW = re.compile(r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\s(?P<nick>\S+)\s(?P<msg>.*)$")
+LOG_KICK_RE_OLD = re.compile(
+    r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\*\*\s(?P<victim>\S+) was kicked by (?P<kicker>\S+)(?: \((?P<reason>.*)\))?$"
+)
+LOG_KICK_RE_NEW = re.compile(
+    r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\*\*\s(?P<victim>\S+) was kicked by (?P<kicker>\S+)(?: \((?P<reason>.*)\))?$"
+)
+LOG_JOIN_RE_OLD = re.compile(r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\*\*\s(?P<nick>\S+) has joined")
+LOG_JOIN_RE_NEW = re.compile(r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\*\*\s(?P<nick>\S+) has joined")
+LOG_MODE_RE_OLD = re.compile(
+    r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\*\*\s(?P<setter>\S+) sets mode (?P<mode>[+-]o) (?P<target>\S+)"
+)
+LOG_MODE_RE_NEW = re.compile(
+    r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\*\*\s(?P<setter>\S+) sets mode (?P<mode>[+-]o) (?P<target>\S+)"
+)
+TOPIC_SET_RE_OLD = re.compile(
+    r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<setter>\S+)\sset the topic to\s(?P<topic>.+)$"
+)
+TOPIC_SET_RE_NEW = re.compile(
+    r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\s(?P<setter>\S+)\sset the topic to\s(?P<topic>.+)$"
 )
 URL_RE = re.compile(r"(https?://\S+)")
+SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
+BAD_WORDS = {"fuck", "shit", "damn", "bitch", "crap", "ass", "piss", "dick", "cunt"}
+
+# Common stop words to ignore when tallying most used words
+STOP_WORDS = {
+    "a",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "all",
+    "am",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "below",
+    "between",
+    "both",
+    "but",
+    "by",
+    "can",
+    "cant",
+    "could",
+    "couldnt",
+    "did",
+    "didnt",
+    "do",
+    "does",
+    "doesnt",
+    "doing",
+    "dont",
+    "down",
+    "during",
+    "each",
+    "few",
+    "for",
+    "from",
+    "further",
+    "had",
+    "hadnt",
+    "has",
+    "hasnt",
+    "have",
+    "havent",
+    "having",
+    "he",
+    "her",
+    "here",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "i",
+    "if",
+    "im",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "itself",
+    "just",
+    "me",
+    "more",
+    "most",
+    "my",
+    "myself",
+    "no",
+    "nor",
+    "not",
+    "now",
+    "of",
+    "off",
+    "on",
+    "once",
+    "only",
+    "or",
+    "other",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "same",
+    "she",
+    "should",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "to",
+    "too",
+    "under",
+    "until",
+    "up",
+    "very",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "why",
+    "will",
+    "with",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
+}
+
+STOP_WORDS.update(
+    {
+        w.strip().lower()
+        for w in os.environ.get("IGNOREWORDS", "").split(",")
+        if w.strip()
+    }
+)
+
+try:
+    from profanity_check import predict as profanity_predict
+except Exception:  # pragma: no cover - optional dependency
+    profanity_predict = None
+
+_PROFANITY_CACHE = {}
+
+
+def is_profane(word: str) -> bool:
+    word = word.lower()
+    if profanity_predict:
+        if word not in _PROFANITY_CACHE:
+            _PROFANITY_CACHE[word] = bool(profanity_predict([word])[0])
+        return _PROFANITY_CACHE[word]
+    return word in BAD_WORDS
+
+BRIDGE_NICKS = {
+    n.strip().lower()
+    for n in os.environ.get("BRIDGENICKS", "").split(",")
+    if n.strip()
+}
+BRIDGE_MSG_RE = re.compile(r"^(?:\d*)?<@?([^>]+)>\s+(.+)$")
+
+DEFAULT_SERVICE_NICKS = {
+    "chanserv",
+    "nickserv",
+    "memoserv",
+    "operserv",
+    "hostserv",
+    "botserv",
+    "helpserv",
+    "global",
+}
+
+BOT_NICKS = set(DEFAULT_SERVICE_NICKS)
+BOT_PATTERNS = []
+for n in os.environ.get("BOTNICKS", "").split(","):
+    n = n.strip().lower()
+    if not n:
+        continue
+    if "*" in n or "?" in n:
+        BOT_PATTERNS.append(n)
+    else:
+        BOT_NICKS.add(n)
+
+NICK_ALIASES = {}
+NICK_ALIAS_PATTERNS = []
+for pair in os.environ.get("NICKALIASES", "").split(","):
+    if "=" in pair:
+        alias, canonical = pair.split("=", 1)
+        alias = alias.strip().lower()
+        canonical = canonical.strip().lower()
+        if alias and canonical:
+            if "*" in alias or "?" in alias:
+                NICK_ALIAS_PATTERNS.append((alias, canonical))
+            else:
+                NICK_ALIASES[alias] = canonical
+
+
+IGNORE_NICKS = set()
+IGNORE_PATTERNS = []
+for n in os.environ.get("IGNORNICKS", "").split(","):
+    n = n.strip().lower()
+    if not n:
+        continue
+    if "*" in n or "?" in n:
+        IGNORE_PATTERNS.append(n)
+    else:
+        IGNORE_NICKS.add(n)
+
+NICK_GENDERS = {}
+NICK_GENDER_PATTERNS = []
+
+
+def load_config(cfg_path: str) -> None:
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.read(cfg_path)
+    if cfg.has_section("bots"):
+        for n in cfg.get("bots", "nicks", fallback="").split(","):
+            n = n.strip().lower()
+            if not n:
+                continue
+            if "*" in n or "?" in n:
+                BOT_PATTERNS.append(n)
+            else:
+                BOT_NICKS.add(n)
+    if cfg.has_section("aliases"):
+        for key, val in cfg.items("aliases"):
+            key = key.strip().lower()
+            val = val.strip().lower()
+            if not key or not val:
+                continue
+            if any(ch in val for ch in ", *"):
+                canonical = key
+                aliases = re.split(r"[\s,]+", val)
+            else:
+                canonical = val
+                aliases = [key]
+            for alias in aliases:
+                alias = alias.strip()
+                if not alias:
+                    continue
+                if "*" in alias or "?" in alias:
+                    NICK_ALIAS_PATTERNS.append((alias, canonical))
+                else:
+                    NICK_ALIASES[alias] = canonical
+    if cfg.has_section("ignore"):
+        for n in cfg.get("ignore", "nicks", fallback="").split(","):
+            n = n.strip().lower()
+            if not n:
+                continue
+            if "*" in n or "?" in n:
+                IGNORE_PATTERNS.append(n)
+            else:
+                IGNORE_NICKS.add(n)
+    if cfg.has_section("ignorewords"):
+        STOP_WORDS.update(
+            w.strip().lower()
+            for w in cfg.get("ignorewords", "words", fallback="").split(",")
+            if w.strip()
+        )
+    if cfg.has_section("bridge"):
+        BRIDGE_NICKS.update(
+            n.strip().lower()
+            for n in cfg.get("bridge", "nicks", fallback="").split(",")
+            if n.strip()
+        )
+    if cfg.has_section("users"):
+        for nick, gender in cfg.items("users"):
+            nick = nick.strip().lower()
+            g = gender.strip().lower()
+            if "*" in nick or "?" in nick:
+                NICK_GENDER_PATTERNS.append((nick, g))
+            else:
+                NICK_GENDERS[nick] = g
+                if g == "bot":
+                    BOT_NICKS.add(nick)
+
+
+GENDER_PRONOUNS = {
+    "male": {"subj": "he", "obj": "him", "poss": "his", "ref": "himself", "be": "he's"},
+    "female": {"subj": "she", "obj": "her", "poss": "her", "ref": "herself", "be": "she's"},
+    "bot": {"subj": "it", "obj": "it", "poss": "its", "ref": "itself", "be": "it's"},
+    "unknown": {"subj": "they", "obj": "them", "poss": "their", "ref": "themselves", "be": "they're"},
+}
+
+
+def canonical_nick(nick: str) -> str:
+    n = nick.lower()
+    if n in NICK_ALIASES:
+        return NICK_ALIASES[n]
+    for pattern, canonical in NICK_ALIAS_PATTERNS:
+        if fnmatch.fnmatch(n, pattern):
+            return canonical
+    return n
+
+
+def get_gender(nick: str) -> str:
+    n = canonical_nick(nick)
+    if n in NICK_GENDERS:
+        return NICK_GENDERS[n]
+    for pattern, g in NICK_GENDER_PATTERNS:
+        if fnmatch.fnmatch(n, pattern):
+            return g
+    return "unknown"
+
+
+def pronoun(nick: str, form: str) -> str:
+    gender = get_gender(nick)
+    return GENDER_PRONOUNS.get(gender, GENDER_PRONOUNS["unknown"])[form]
+
+
+def is_bot(nick: str) -> bool:
+    n = nick.lower()
+    if n in BOT_NICKS:
+        return True
+    return any(fnmatch.fnmatch(n, p) for p in BOT_PATTERNS)
+
+
+def is_ignored(nick: str) -> bool:
+    n = nick.lower()
+    if n in IGNORE_NICKS:
+        return True
+    return any(fnmatch.fnmatch(n, p) for p in IGNORE_PATTERNS)
 
 CACHE_DIR = Path(".cache_ircstats")
 
-BLACKLIST = {"like", "shit", "the", "a", "you", "and", "to", "for", "of", "in", "on", "is", "it", "i", "we", "me", "my"}
+
+def clean_bridge_nick(nick):
+    nick = "".join(
+        ch for ch in nick if unicodedata.category(ch) != "Cf"
+    )
+    nick = re.sub(r"\s+", "_", nick)
+    nick = re.sub(r"[^a-zA-Z0-9_\-\[\]\\\^\{\}`|]+", "", nick)
+    return nick
+
+
+def handle_bridge(nick, msg):
+    if nick in BRIDGE_NICKS:
+        m = BRIDGE_MSG_RE.match(msg)
+        if not m:
+            return None, None
+        real_nick = clean_bridge_nick(m.group(1))
+        real_msg = m.group(2)
+        return real_nick.lower(), real_msg
+    return nick, msg
 
 
 def parse_line(line, current_date=None):
@@ -49,17 +424,6 @@ def parse_line(line, current_date=None):
         msg = m.group("msg")
         return dt, nick, msg
 
-    # Topic line example
-    m = TOPIC_SET_RE.match(line)
-    if m:
-        dt_str = m.group("timestamp")
-        try:
-            dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return None, None, None
-        setter = m.group("setter").lower()
-        topic = m.group("topic")
-        return dt, setter, topic  # special case for topic
     return None, None, None
 
 
@@ -77,17 +441,49 @@ def relative_day_string(dt):
         return dt.strftime("%Y-%m-%d")
 
 
-def is_valid_nick(nick):
-    return nick.lower() not in BLACKLIST
-
-
+def hour_to_color(hour):
+    if 0 <= hour < 6:
+        return "#1e88e5"  # blue
+    if 6 <= hour < 12:
+        return "#e53935"  # red
+    if 12 <= hour < 18:
+        return "#fdd835"  # yellow
+    return "#43a047"  # green
 def build_known_nicks(log_dir, cache_file="known_nicks.json"):
     cache_path = Path(cache_file)
+    alias_sig = dict(sorted(NICK_ALIASES.items()))
+    alias_pat_sig = sorted(f"{p}->{c}" for p, c in NICK_ALIAS_PATTERNS)
+    bot_sig = sorted(BOT_NICKS)
+    bot_pat_sig = sorted(BOT_PATTERNS)
+    ignore_sig = sorted(IGNORE_NICKS)
+    ignore_pat_sig = sorted(IGNORE_PATTERNS)
     if cache_path.exists():
         with open(cache_path, "r", encoding="utf-8") as f:
-            known = set(json.load(f))
-        print(f"Loaded {len(known)} known nicks from cache.")
-        return known
+            data = json.load(f)
+        if (
+            isinstance(data, dict)
+            and data.get("aliases") == alias_sig
+            and data.get("alias_patterns") == alias_pat_sig
+            and data.get("bots") == bot_sig
+            and data.get("bot_patterns") == bot_pat_sig
+            and data.get("ignore") == ignore_sig
+            and data.get("ignore_patterns") == ignore_pat_sig
+        ):
+            known = set(data.get("nicks", []))
+            print(f"Loaded {len(known)} known nicks from cache.")
+            return known
+        elif (
+            isinstance(data, list)
+            and not NICK_ALIASES
+            and not NICK_ALIAS_PATTERNS
+            and not BOT_NICKS
+            and not BOT_PATTERNS
+            and not IGNORE_NICKS
+            and not IGNORE_PATTERNS
+        ):
+            known = set(data)
+            print(f"Loaded {len(known)} known nicks from cache.")
+            return known
 
     known = set()
     path = Path(log_dir)
@@ -100,11 +496,36 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
             for line in f:
                 # parse_line should return (datetime, nick, message)
                 dt, nick, msg = parse_line(line, date_part)
-                if nick and is_valid_nick(nick):
-                    known.add(nick)
+                if not nick:
+                    m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
+                    if m:
+                        setter = canonical_nick(m.group("setter").lower())
+                        if is_bot(setter) or is_ignored(setter):
+                            continue
+                        known.add(setter)
+                    continue
+                nick, msg = handle_bridge(nick, msg)
+                if not nick:
+                    continue
+                nick = canonical_nick(nick)
+                if is_bot(nick) or is_ignored(nick):
+                    continue
+                known.add(nick)
 
     with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(sorted(known), f, indent=2)
+        json.dump(
+            {
+                "nicks": sorted(known),
+                "aliases": alias_sig,
+                "alias_patterns": alias_pat_sig,
+                "bots": bot_sig,
+                "bot_patterns": bot_pat_sig,
+                "ignore": ignore_sig,
+                "ignore_patterns": ignore_pat_sig,
+            },
+            f,
+            indent=2,
+        )
     print(f"Built known nicks list with {len(known)} entries and cached to {cache_path}")
     return known
 
@@ -135,7 +556,25 @@ def parse_log_file_with_nicks(log_file, known_nicks):
     url_counts = Counter()
     topics = []
     hours_active = Counter()
+    dow_active = Counter()
+    user_hour_active = defaultdict(Counter)
+    word_counts = Counter()
+    smiley_counts = Counter()
+    word_last_used = {}
+    mention_last_by = {}
+    kicks_received = Counter()
+    kicks_given = Counter()
+    kick_examples = {}
+    joins = Counter()
+    actions = Counter()
+    action_examples = {}
+    op_give_count = 0
+    op_take_count = 0
+    monologues = Counter()
+    bad_word_counts = Counter()
     total_lines = 0
+    last_nick = None
+    streak = 0
 
     # Determine current_date for partial timestamp logs
     try:
@@ -144,46 +583,168 @@ def parse_log_file_with_nicks(log_file, known_nicks):
         current_date = None
 
     with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            dt, nick, msg = parse_line(line, current_date)
-            if dt is None:
-                # check for topic set (special)
-                m = TOPIC_SET_RE.match(line.rstrip("\n"))
-                if m:
-                    try:
-                        dt = datetime.datetime.strptime(m.group("timestamp"), "%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        continue
-                    setter = m.group("setter").lower()
-                    topic = m.group("topic")
-                    topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
+        for raw_line in f:
+            line = raw_line.rstrip("\n")
+
+            m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
+            if m:
+                dt_str = m.group("timestamp")
+                try:
+                    if len(dt_str) == 8:
+                        dt_time = datetime.datetime.strptime(dt_str, "%H:%M:%S").time()
+                        dt = datetime.datetime.combine(current_date, dt_time) if current_date else None
+                    else:
+                        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    continue
+                if dt is None:
+                    continue
+                setter = canonical_nick(m.group("setter").lower())
+                if is_bot(setter) or is_ignored(setter):
+                    continue
+                topic = m.group("topic").strip()
+                topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
                 continue
+
+            m = LOG_KICK_RE_OLD.match(line) or LOG_KICK_RE_NEW.match(line)
+            if m:
+                dt_str = m.group("timestamp")
+                try:
+                    if len(dt_str) == 8:
+                        dt_time = datetime.datetime.strptime(dt_str, "%H:%M:%S").time()
+                        dt = datetime.datetime.combine(current_date, dt_time) if current_date else None
+                    else:
+                        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    dt = None
+                victim = canonical_nick(m.group("victim").lower())
+                kicker = canonical_nick(m.group("kicker").lower())
+                if (
+                    is_bot(victim)
+                    or is_bot(kicker)
+                    or is_ignored(victim)
+                    or is_ignored(kicker)
+                ):
+                    continue
+                kicks_received[victim] += 1
+                kicks_given[kicker] += 1
+                if victim not in kick_examples:
+                    kick_examples[victim] = line.split("] ", 1)[1]
+                continue
+
+            m = LOG_JOIN_RE_OLD.match(line) or LOG_JOIN_RE_NEW.match(line)
+            if m:
+                nick = canonical_nick(m.group("nick").lower())
+                if is_bot(nick) or is_ignored(nick):
+                    continue
+                joins[nick] += 1
+                continue
+
+            m = LOG_MODE_RE_OLD.match(line) or LOG_MODE_RE_NEW.match(line)
+            if m:
+                setter = canonical_nick(m.group("setter").lower())
+                target = canonical_nick(m.group("target").lower())
+                if (
+                    is_bot(setter)
+                    or is_bot(target)
+                    or is_ignored(setter)
+                    or is_ignored(target)
+                ):
+                    continue
+                mode = m.group("mode")
+                if mode == "+o":
+                    op_give_count += 1
+                elif mode == "-o":
+                    op_take_count += 1
+                continue
+
+            m = LOG_ACTION_RE_OLD.match(line) or LOG_ACTION_RE_NEW.match(line)
+            if m:
+                dt_str = m.group("timestamp")
+                try:
+                    if len(dt_str) == 8:
+                        dt_time = datetime.datetime.strptime(dt_str, "%H:%M:%S").time()
+                        dt = datetime.datetime.combine(current_date, dt_time) if current_date else None
+                    else:
+                        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    dt = None
+                nick = m.group("nick").lower()
+                msg = m.group("msg")
+                is_action = True
+            else:
+                dt, nick, msg = parse_line(line, current_date)
+                is_action = False
+            if dt is None or not nick:
+                continue
+
+            nick, msg = handle_bridge(nick, msg)
             if not nick:
+                continue
+            nick = canonical_nick(nick)
+            if is_bot(nick) or is_ignored(nick):
                 continue
 
             total_lines += 1
             lines_by_user[nick] += 1
-            words_by_user[nick] += len(msg.split())
+            words = msg.split()
+            words_by_user[nick] += len(words)
 
             if nick not in last_seen_by_user or dt > last_seen_by_user[nick]:
                 last_seen_by_user[nick] = dt
 
-            # Store last 50 messages for random quotes
             if len(messages_by_user[nick]) >= 50:
                 messages_by_user[nick].pop(0)
             messages_by_user[nick].append(msg)
 
-            # Extract mentions (simple approach: word matches known nick)
-            for word in msg.split():
+            for word in words:
                 wclean = word.lower().strip(",.:;!?()[]{}<>\"'")
-                if wclean in known_nicks and wclean != nick:
-                    mentions_by_user[nick][wclean] += 1
+                if not wclean:
+                    continue
+                wnick = canonical_nick(wclean)
+                if is_ignored(wnick) or is_bot(wnick):
+                    continue
+                if wnick in known_nicks and wnick != nick:
+                    mentions_by_user[nick][wnick] += 1
+                    mention_last_by[wnick] = (dt, nick)
+                if wclean.isalpha():
+                    if wclean not in STOP_WORDS and wnick not in known_nicks:
+                        word_counts[wclean] += 1
+                        word_last_used[wclean] = (dt, nick)
+                    if is_profane(wclean):
+                        bad_word_counts[nick] += 1
 
-            # Extract URLs
             for url in URL_RE.findall(msg):
                 url_counts[url] += 1
 
+            for sm in SMILEY_RE.findall(msg):
+                smiley_counts[sm] += 1
+
             hours_active[dt.hour] += 1
+            dow_active[dt.weekday()] += 1
+            user_hour_active[nick][dt.hour] += 1
+
+            if is_action:
+                op_line = False
+                if "set +o" in msg or "sets mode +o" in msg:
+                    op_give_count += 1
+                    op_line = True
+                elif "set -o" in msg or "sets mode -o" in msg:
+                    op_take_count += 1
+                    op_line = True
+
+                if not op_line:
+                    actions[nick] += 1
+                    if nick not in action_examples:
+                        action_examples[nick] = f"* {nick} {msg}"
+
+            if nick == last_nick:
+                streak += 1
+                if streak == 6:
+                    monologues[nick] += 1
+            else:
+                last_nick = nick
+                streak = 1
 
     return {
         "lines_by_user": lines_by_user,
@@ -192,15 +753,43 @@ def parse_log_file_with_nicks(log_file, known_nicks):
         "url_counts": url_counts,
         "topics": topics,
         "hours_active": hours_active,
+        "dow_active": dow_active,
+        "word_counts": word_counts,
+        "smiley_counts": smiley_counts,
         "total_lines": total_lines,
         "last_seen": last_seen_by_user,
         "messages": messages_by_user,
+        "user_hour_active": user_hour_active,
+        "word_last_used": word_last_used,
+        "mention_last_by": mention_last_by,
+        "kicks_received": kicks_received,
+        "kicks_given": kicks_given,
+        "kick_examples": kick_examples,
+        "joins": joins,
+        "actions": actions,
+        "action_examples": action_examples,
+        "op_give_count": op_give_count,
+        "op_take_count": op_take_count,
+        "monologues": monologues,
+        "bad_word_counts": bad_word_counts,
     }
 
 
 def merge_stats(global_stats, file_stats):
-    for k in ["lines_by_user", "words_by_user", "url_counts", "hours_active"]:
-        global_stats[k].update(file_stats[k])
+    for k in [
+        "lines_by_user",
+        "words_by_user",
+        "url_counts",
+        "hours_active",
+        "dow_active",
+        "word_counts",
+        "smiley_counts",
+    ]:
+        if k in file_stats:
+            global_stats[k].update(file_stats[k])
+    # merge per-user hourly activity
+    for user, hours in file_stats.get("user_hour_active", {}).items():
+        global_stats["user_hour_active"][user].update(hours)
     # merge mentions
     for user, mentions in file_stats["mentions_by_user"].items():
         global_stats["mentions_by_user"][user].update(mentions)
@@ -217,6 +806,46 @@ def merge_stats(global_stats, file_stats):
         combined = global_stats["messages"][nick] + msgs
         global_stats["messages"][nick] = combined[-50:]
 
+    # merge word last used info
+    for word, (dt, nick) in file_stats.get("word_last_used", {}).items():
+        prev = global_stats["word_last_used"].get(word)
+        if not prev or dt > prev[0]:
+            global_stats["word_last_used"][word] = (dt, nick)
+
+    # merge mention last by info
+    for word, (dt, nick) in file_stats.get("mention_last_by", {}).items():
+        prev = global_stats["mention_last_by"].get(word)
+        if not prev or dt > prev[0]:
+            global_stats["mention_last_by"][word] = (dt, nick)
+
+    for k in [
+        "kicks_received",
+        "kicks_given",
+        "joins",
+        "actions",
+        "monologues",
+        "bad_word_counts",
+    ]:
+        if k in file_stats:
+            global_stats[k].update(file_stats[k])
+
+    for nick, line in file_stats.get("kick_examples", {}).items():
+        global_stats.setdefault("kick_examples", {})
+        if nick not in global_stats["kick_examples"]:
+            global_stats["kick_examples"][nick] = line
+
+    for nick, line in file_stats.get("action_examples", {}).items():
+        global_stats.setdefault("action_examples", {})
+        if nick not in global_stats["action_examples"]:
+            global_stats["action_examples"][nick] = line
+
+    global_stats["op_give_count"] = global_stats.get("op_give_count", 0) + file_stats.get(
+        "op_give_count", 0
+    )
+    global_stats["op_take_count"] = global_stats.get("op_take_count", 0) + file_stats.get(
+        "op_take_count", 0
+    )
+
 
 def save_cache(log_file, data):
     CACHE_DIR.mkdir(exist_ok=True)
@@ -229,7 +858,12 @@ def save_cache(log_file, data):
 
     serialized = {}
     for k, v in data.items():
-        if isinstance(v, dict) or isinstance(v, Counter) or isinstance(v, defaultdict):
+        if k in ["word_last_used", "mention_last_by"]:
+            serialized[k] = {
+                word: {"time": val[0].isoformat(), "nick": val[1]}
+                for word, val in v.items()
+            }
+        elif isinstance(v, dict) or isinstance(v, Counter) or isinstance(v, defaultdict):
             # serialize all datetime values inside nested dicts
             serialized[k] = {user: serialize_value(val) for user, val in v.items()}
         else:
@@ -238,54 +872,147 @@ def save_cache(log_file, data):
     # topics is list of dicts - no datetime objects left, but just to be sure:
     serialized["topics"] = data["topics"]
     serialized["total_lines"] = data["total_lines"]
+    serialized["bot_nicks"] = sorted(BOT_NICKS)
+    serialized["bot_patterns"] = sorted(BOT_PATTERNS)
+    serialized["nick_aliases"] = dict(sorted(NICK_ALIASES.items()))
+    serialized["nick_alias_patterns"] = sorted(
+        f"{p}->{c}" for p, c in NICK_ALIAS_PATTERNS
+    )
+    serialized["bridge_nicks"] = sorted(BRIDGE_NICKS)
+    serialized["ignore_nicks"] = sorted(IGNORE_NICKS)
+    serialized["ignore_patterns"] = sorted(IGNORE_PATTERNS)
+    serialized["stop_words"] = sorted(STOP_WORDS)
 
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(serialized, f, indent=1)
 
 
-def load_cache(log_file):
+def load_cache(log_file, known_nicks):
     cache_path = CACHE_DIR / (log_file.stem + ".json")
     if not cache_path.exists():
         return None
     try:
         with open(cache_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
+        if set(raw.get("bot_nicks", [])) != BOT_NICKS:
+            return None
+        if set(raw.get("bot_patterns", [])) != set(BOT_PATTERNS):
+            return None
+        if raw.get("nick_aliases", {}) != dict(sorted(NICK_ALIASES.items())):
+            return None
+        if set(raw.get("nick_alias_patterns", [])) != set(
+            f"{p}->{c}" for p, c in NICK_ALIAS_PATTERNS
+        ):
+            return None
+        if set(raw.get("bridge_nicks", [])) != BRIDGE_NICKS:
+            return None
+        if set(raw.get("ignore_nicks", [])) != IGNORE_NICKS:
+            return None
+        if set(raw.get("ignore_patterns", [])) != set(IGNORE_PATTERNS):
+            return None
+        if set(raw.get("stop_words", [])) != STOP_WORDS:
+            return None
+        raw.pop("bot_nicks", None)
+        raw.pop("bot_patterns", None)
+        raw.pop("nick_aliases", None)
+        raw.pop("nick_alias_patterns", None)
+        raw.pop("bridge_nicks", None)
+        raw.pop("ignore_nicks", None)
+        raw.pop("ignore_patterns", None)
+        raw.pop("stop_words", None)
         # Deserialize last_seen timestamps
         raw["last_seen"] = {k: datetime.datetime.fromisoformat(v) for k, v in raw.get("last_seen", {}).items()}
-        # messages and others remain as is
+        # Convert per-user hour maps back to Counters
+        raw["user_hour_active"] = {
+            user: Counter({int(h): c for h, c in hours.items()})
+            for user, hours in raw.get("user_hour_active", {}).items()
+        }
+        # Ensure hourly and weekday activity use integer keys
+        raw["hours_active"] = Counter({int(h): c for h, c in raw.get("hours_active", {}).items()})
+        raw["dow_active"] = Counter({int(d): c for d, c in raw.get("dow_active", {}).items()})
+        raw["word_last_used"] = {
+            w: (datetime.datetime.fromisoformat(v["time"]), v["nick"])
+            for w, v in raw.get("word_last_used", {}).items()
+        }
+        raw["mention_last_by"] = {
+            w: (datetime.datetime.fromisoformat(v["time"]), v["nick"])
+            for w, v in raw.get("mention_last_by", {}).items()
+        }
+        raw["word_counts"] = Counter(
+            {
+                w: c
+                for w, c in raw.get("word_counts", {}).items()
+                if w not in STOP_WORDS and w not in known_nicks
+            }
+        )
+        raw["word_last_used"] = {
+            w: v
+            for w, v in raw.get("word_last_used", {}).items()
+            if w not in STOP_WORDS and w not in known_nicks
+        }
+        for k in [
+            "kicks_received",
+            "kicks_given",
+            "joins",
+            "actions",
+            "monologues",
+            "bad_word_counts",
+        ]:
+            raw[k] = Counter(raw.get(k, {}))
+        raw["kick_examples"] = raw.get("kick_examples", {})
+        raw["action_examples"] = raw.get("action_examples", {})
+        raw["op_give_count"] = raw.get("op_give_count", 0)
+        raw["op_take_count"] = raw.get("op_take_count", 0)
         return raw
     except Exception:
         return None
 
 
-def write_detailed_nick_stats(global_stats, output):
-    # Sort by lines desc
-    sorted_users = sorted(global_stats["lines_by_user"].items(), key=lambda x: x[1], reverse=True)[:20]
+def write_most_active_nicks(global_stats, output):
+    sorted_users = sorted(
+        global_stats["lines_by_user"].items(), key=lambda x: x[1], reverse=True
+    )[:10]
 
-    output.append("<h2>Detailed Nick Stats</h2>")
-    output.append("<table>")
-    output.append("<tr><th>Nick</th><th>Number of lines</th><th>When?</th><th>Last seen</th><th>Random quote</th></tr>")
+    output.append("<section id='most-active-nicks'>")
+    output.append("<h2>Most Active Nicks</h2>")
+    output.append(
+        "<table><tr><th>Nick</th><th>Number of lines</th><th>Activity</th><th>Last seen</th><th>Random quote</th></tr>"
+    )
 
     for nick, lines in sorted_users:
-        last_seen = global_stats["last_seen"].get(nick)
-        if last_seen:
-            when_str = relative_day_string(last_seen)
-            last_seen_str = last_seen.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            when_str = "unknown"
-            last_seen_str = "unknown"
+        hours = global_stats["user_hour_active"].get(nick, {})
+        total = sum(hours.values())
+        segments = []
+        if total:
+            groups = [
+                sum(hours.get(h, 0) for h in range(0, 6)),
+                sum(hours.get(h, 0) for h in range(6, 12)),
+                sum(hours.get(h, 0) for h in range(12, 18)),
+                sum(hours.get(h, 0) for h in range(18, 24)),
+            ]
+            for idx, count in enumerate(groups):
+                width = count / total * 100
+                segments.append(
+                    f"<div style='background:{hour_to_color(idx*6)};width:{width}%;height:10px'></div>"
+                )
+        activity_bar = (
+            f"<div style='display:flex;width:100%;height:10px'>{''.join(segments)}</div>"
+            if segments
+            else "<div style='height:10px'></div>"
+        )
 
+        last_seen_dt = global_stats["last_seen"].get(nick)
+        last_seen_str = (
+            relative_day_string(last_seen_dt) if last_seen_dt else "unknown"
+        )
         quotes = global_stats["messages"].get(nick, [])
         quote = random.choice(quotes) if quotes else ""
 
-        quote_escaped = html.escape(quote)
-        nick_escaped = html.escape(nick)
-
         output.append(
-            f'<tr><td>{nick_escaped}</td><td>{lines}</td><td>{when_str}</td><td>{last_seen_str}</td><td>"{quote_escaped}"</td></tr>'
+            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td>{activity_bar}</td><td>{html.escape(last_seen_str)}</td><td class='quote'>\"{html.escape(quote)}\"</td></tr>"
         )
 
-    output.append("</table>")
+    output.append("</table></section>")
 
 
 def write_html_report(global_stats, output_path):
@@ -306,74 +1033,300 @@ def write_html_report(global_stats, output_path):
     output.append(
         """
     <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; color: #212529; }
-    h1, h2 { border-bottom: 2px solid #343a40; padding-bottom: 6px; }
-    table { border-collapse: collapse; width: 100%; max-width: 800px; margin-bottom: 30px; }
-    th, td { border: 1px solid #dee2e6; padding: 8px 12px; text-align: left; }
-    th { background-color: #343a40; color: white; }
-    tr:nth-child(even) { background-color: #e9ecef; }
-    ul { max-width: 800px; }
+    body { font-family: Verdana, Arial, sans-serif; margin: 0; background: #f5f5f5; color: #333; }
+    header { background: linear-gradient(90deg, #263238, #37474f); color: #fff; padding: 20px 0; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    header h1 { margin: 0; font-size: 2rem; }
+    main { max-width: 1000px; margin: 30px auto; padding: 0 15px; }
+    section { margin-bottom: 40px; }
+    h2 { border-bottom: 2px solid #ccc; padding-bottom: 4px; color: #263238; }
+    table { border-collapse: collapse; width: 100%; background: #fff; margin-top: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+    th { background: #263238; color: #fff; }
+    tr:nth-child(even) { background-color: #f0f8ff; }
+    tr:hover { background-color: #e1f5fe; }
+    td.quote { white-space: normal; word-break: break-word; }
     </style>
     """
     )
     output.append("</head><body>")
-    output.append("<h1>IRC Channel Statistics</h1>")
 
-    # Top Talkers (lines)
-    output.append("<h2>Top Talkers (Lines)</h2>")
-    output.append("<table>")
-    output.append(build_rows(global_stats["lines_by_user"].most_common(10), "Nick", "Lines"))
-    output.append("</table>")
+    channel = os.environ.get("CHANNEL_NAME", "#channel")
+    network = os.environ.get("NETWORK_NAME", "IRC")
+    author = os.environ.get("AUTHOR_NAME", "Rusty")
+    generated_on = datetime.datetime.now().strftime("%A %d %B %Y - %H:%M:%S")
 
-    # Wordiest users
-    output.append("<h2>Wordiest Users</h2>")
-    output.append("<table>")
-    output.append(build_rows(global_stats["words_by_user"].most_common(10), "Nick", "Words"))
+    log_dates = global_stats.get("log_dates", set())
+    reporting_days = (
+        (max(log_dates) - min(log_dates)).days + 1 if log_dates else 0
+    )
+    active_nicks = len(global_stats["lines_by_user"])
+
+    header_lines = [
+        f"<h1>{html.escape(channel)} @ {html.escape(network)} stats by {html.escape(author)}</h1>",
+        f"<p>Statistics generated on {generated_on}</p>",
+    ]
+    if reporting_days and active_nicks:
+        header_lines.append(
+            f"<p>During this {reporting_days}-day reporting period, a total of {active_nicks} different nicks were represented on {html.escape(channel)}.</p>"
+        )
+    output.append("<header>" + "".join(header_lines) + "</header>")
+    output.append("<main>")
+
+    # Channel activity by hour
+    max_hour = (
+        max(global_stats["hours_active"].values())
+        if global_stats["hours_active"]
+        else 0
+    )
+    total_hour_lines = sum(global_stats["hours_active"].values())
+    output.append("<section id='activity-by-hour'>")
+    output.append("<h2>Most Active Times</h2>")
+    output.append("<div style='display:flex;align-items:flex-end;height:120px'>")
+    for hour in range(24):
+        count = global_stats["hours_active"].get(hour, 0)
+        height = (count / max_hour * 100) if max_hour else 0
+        percent = (count / total_hour_lines * 100) if total_hour_lines else 0
+        color = hour_to_color(hour)
+        output.append(
+            "<div style='flex:1;margin:0 1px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center'>"
+            f"<div style='font-size:smaller'>{percent:.1f}%</div>"
+            f"<div style='background:{color};height:{height}%;width:100%'></div>"
+            f"<div style='font-size:smaller'>{hour:02d}</div>"
+            "</div>"
+        )
+    output.append("</div>")
+    output.append(
+        "<div style='display:flex;justify-content:space-between;font-size:smaller;margin-top:4px'>"
+        "<span style='color:#1e88e5'>0-5</span>"
+        "<span style='color:#e53935'>6-11</span>"
+        "<span style='color:#fdd835'>12-17</span>"
+        "<span style='color:#43a047'>18-23</span>"
+        "</div>"
+    )
+    output.append("</section>")
+
+    # Most Active Nicks table with stacked bars
+    write_most_active_nicks(global_stats, output)
+
+    # Most used words
+    output.append("<section id='top-words'>")
+    output.append("<h2>Most Used Words</h2>")
+    output.append("<table><tr><th>Word</th><th>Count</th><th>Last used by</th></tr>")
+    for word, cnt in global_stats["word_counts"].most_common(10):
+        last_by = global_stats["word_last_used"].get(word, (None, "unknown"))[1]
+        output.append(
+            f"<tr><td>{html.escape(word)}</td><td>{cnt}</td><td>{html.escape(last_by)}</td></tr>"
+        )
     output.append("</table>")
+    output.append("</section>")
 
     # Most mentioned (aggregate all mentions)
     aggregate_mentions = Counter()
     for user, mentions in global_stats["mentions_by_user"].items():
-        aggregate_mentions.update(mentions)
+        for nick, cnt in mentions.items():
+            if nick in global_stats["lines_by_user"]:
+                aggregate_mentions[nick] += cnt
 
+    output.append("<section id='most-mentioned'>")
     output.append("<h2>Most Mentioned (by all users)</h2>")
-    output.append("<table>")
-    output.append(build_rows(aggregate_mentions.most_common(10), "Nick", "Mentions"))
+    output.append("<table><tr><th>Nick</th><th>Mentions</th><th>Last mentioned by</th></tr>")
+    for nick, cnt in aggregate_mentions.most_common(10):
+        last_by = global_stats["mention_last_by"].get(nick, (None, "unknown"))[1]
+        output.append(
+            f"<tr><td>{html.escape(nick)}</td><td>{cnt}</td><td>{html.escape(last_by)}</td></tr>"
+        )
     output.append("</table>")
+    output.append("</section>")
 
     # Most referenced URLs
+    output.append("<section id='top-urls'>")
     output.append("<h2>Most Referenced URLs</h2>")
     output.append("<table>")
-    output.append(build_rows(global_stats["url_counts"].most_common(10), "URL", "Count"))
+    top_urls = [
+        (url, c)
+        for url, c in global_stats["url_counts"].most_common()
+        if c >= 2
+    ][:10]
+    output.append(build_rows(top_urls, "URL", "Count"))
     output.append("</table>")
+    output.append("</section>")
+
+    # Smiley stats
+    output.append("<section id='smiley-stats'>")
+    output.append("<h2>Smileys</h2>")
+    output.append("<table>")
+    output.append(
+        build_rows(global_stats["smiley_counts"].most_common(10), "Smiley", "Count")
+    )
+    output.append("</table>")
+    output.append("</section>")
+
+    # Other interesting numbers
+    write_other_numbers(global_stats, output, channel)
 
     # Latest topics
-    output.append("<h2>Latest Topics</h2>")
-    output.append("<ul>")
-    latest_topics = sorted(global_stats["topics"], key=lambda x: x["time"], reverse=True)[:5]
-    for topic in latest_topics:
-        output.append(
-            f"<li><strong>{html.escape(topic['time'])}</strong> by <em>{html.escape(topic['setter'])}</em>: {html.escape(topic['topic'])}</li>"
-        )
-    output.append("</ul>")
+    if global_stats["topics"]:
+        output.append("<section id='latest-topics'>")
+        output.append("<h2>Latest Topics</h2>")
+        output.append("<table><tr><th>Time</th><th>Setter</th><th>Topic</th></tr>")
+        latest_topics = sorted(
+            global_stats["topics"], key=lambda x: x["time"], reverse=True
+        )[:5]
+        for topic in latest_topics:
+            output.append(
+                f"<tr><td>{html.escape(topic['time'])}</td><td>{html.escape(topic['setter'])}</td><td>{html.escape(topic['topic'])}</td></tr>"
+            )
+        output.append("</table>")
+        output.append("</section>")
 
-    # Activity by hour
-    output.append("<h2>Activity by Hour</h2>")
-    output.append("<table><tr><th>Hour</th><th>Messages</th></tr>")
-    for hour in range(24):
-        count = global_stats["hours_active"].get(hour, 0)
-        output.append(f"<tr><td>{hour:02d}:00</td><td>{count}</td></tr>")
-    output.append("</table>")
+    output.append("</main>")
 
-    # Detailed nick stats table
-    write_detailed_nick_stats(global_stats, output)
-
-    output.append("</body></html>")
+    gen_time = global_stats.get("generation_time", 0)
+    h, rem = divmod(gen_time, 3600)
+    m, s = divmod(rem, 60)
+    output.append(
+        "<footer style='text-align:center;font-size:smaller;margin:20px 0;color:#666'>"
+    )
+    output.append(f"Total number of lines: {global_stats['total_lines']}.<br>")
+    output.append("Stats generated by pyircstats.<br>")
+    output.append(
+        f"Stats generated in {int(h):02d} hours {int(m):02d} minutes and {int(s):02d} seconds"
+    )
+    output.append("</footer></body></html>")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(output))
 
     print(f"Wrote HTML report to {output_path}")
+
+
+def write_other_numbers(global_stats, output, channel):
+    stats = []
+    kicks_received = global_stats.get("kicks_received", Counter())
+    if kicks_received:
+        victim1, count1 = kicks_received.most_common(1)[0]
+        example = global_stats.get("kick_examples", {}).get(victim1)
+        stats.append(
+            (f"{victim1} wasn't very popular, getting kicked {count1} times!", example)
+        )
+        if len(kicks_received) > 1:
+            victim2, count2 = kicks_received.most_common(2)[1]
+            stats.append(
+                (f"{victim2} seemed to be hated too: {count2} kicks were received.", None)
+            )
+
+    kicks_given = global_stats.get("kicks_given", Counter())
+    if kicks_given:
+        kicker1, count1 = kicks_given.most_common(1)[0]
+        stats.append(
+            (
+                f"{kicker1} is either insane or just a fair op, kicking a total of {count1} people!",
+                None,
+            )
+        )
+        if len(kicks_given) > 1:
+            kicker2, count2 = kicks_given.most_common(2)[1]
+            stats.append(
+                (
+                    f"{kicker1}'s faithful follower, {kicker2}, kicked about {count2} people.",
+                    None,
+                )
+            )
+
+    op_give = global_stats.get("op_give_count", 0)
+    op_take = global_stats.get("op_take_count", 0)
+    if op_give == 0:
+        stats.append((f"Strange, no op was given on {html.escape(channel)}!", None))
+    else:
+        stats.append((f"Ops were given {op_give} times on {html.escape(channel)}!", None))
+    if op_take == 0:
+        stats.append((f"Wow, no op was taken on {html.escape(channel)}!", None))
+    else:
+        stats.append((f"Ops were taken {op_take} times on {html.escape(channel)}!", None))
+
+    actions = global_stats.get("actions", Counter())
+    if actions:
+        act1, cnt1 = actions.most_common(1)[0]
+        example = global_stats.get("action_examples", {}).get(act1)
+        stats.append(
+            (
+                f"{act1} always lets us know what {pronoun(act1,'be')} doing: {cnt1} actions!",
+                example,
+            )
+        )
+        if len(actions) > 1:
+            act2, cnt2 = actions.most_common(2)[1]
+            stats.append(
+                (f"Also, {act2} tells us what's up with {cnt2} actions.", None)
+            )
+
+    monologues = global_stats.get("monologues", Counter())
+    if monologues:
+        mono1, mc1 = monologues.most_common(1)[0]
+        stats.append(
+            (
+                f"{mono1} talks to {pronoun(mono1,'ref')} a lot. {pronoun(mono1,'subj').capitalize()} wrote over 5 lines in a row {mc1} times!",
+                None,
+            )
+        )
+        if len(monologues) > 1:
+            mono2, mc2 = monologues.most_common(2)[1]
+            stats.append(
+                (f"Another lonely one was {mono2}, who managed to hit {mc2} times.", None)
+            )
+
+    joins = global_stats.get("joins", Counter())
+    if joins:
+        joiner, jc = joins.most_common(1)[0]
+        stats.append(
+            (
+                f"{joiner} couldn't decide whether to stay or go. {jc} joins during this reporting period!",
+                None,
+            )
+        )
+
+    bad_words = global_stats.get("bad_word_counts", Counter())
+    if bad_words:
+        percentages = []
+        for nick, bad in bad_words.items():
+            total = global_stats["words_by_user"].get(nick, 0)
+            if total:
+                percentages.append((nick, bad / total * 100))
+        percentages.sort(key=lambda x: x[1], reverse=True)
+        if percentages:
+            nick1, p1 = percentages[0]
+            stats.append(
+                (
+                    f"{nick1} has quite a potty mouth. {p1:.1f}% words were foul language.",
+                    None,
+                )
+            )
+            if len(percentages) > 1:
+                nick2, p2 = percentages[1]
+                stats.append(
+                    (
+                        f"{nick2} also makes sailors blush, {p2:.1f}% of the time.",
+                        None,
+                    )
+                )
+
+    if not stats:
+        return
+
+    output.append("<section id='other-numbers'>")
+    output.append("<h2>Other interesting numbers</h2>")
+    output.append("<table>")
+    for line, example in stats:
+        if example:
+            output.append(
+                f"<tr><td>{html.escape(line)}<div style='margin-top:4px;font-size:smaller'><code>{html.escape(example)}</code></div></td></tr>"
+            )
+        else:
+            output.append(f"<tr><td>{html.escape(line)}</td></tr>")
+    output.append("</table>")
+    output.append("</section>")
+
+
 
 
 def main(log_dir):
@@ -391,9 +1344,27 @@ def main(log_dir):
         "url_counts": Counter(),
         "topics": [],
         "hours_active": Counter(),
+        "dow_active": Counter(),
+        "word_counts": Counter(),
+        "smiley_counts": Counter(),
         "total_lines": 0,
         "last_seen": {},
         "messages": defaultdict(list),
+        "log_dates": set(),
+        "user_hour_active": defaultdict(Counter),
+        "word_last_used": {},
+        "mention_last_by": {},
+        "kicks_received": Counter(),
+        "kicks_given": Counter(),
+        "kick_examples": {},
+        "joins": Counter(),
+        "actions": Counter(),
+        "action_examples": {},
+        "op_give_count": 0,
+        "op_take_count": 0,
+        "monologues": Counter(),
+        "bad_word_counts": Counter(),
+        "generation_time": 0,
     }
 
     total_start = time.perf_counter()
@@ -403,6 +1374,7 @@ def main(log_dir):
             file_date = datetime.datetime.strptime(log_file.stem, "%Y-%m-%d").date()
         except Exception:
             continue
+        global_stats["log_dates"].add(file_date)
 
         age_days = (today - file_date).days
 
@@ -410,7 +1382,7 @@ def main(log_dir):
 
         cache_data = None
         if file_date < today:
-            cache_data = load_cache(log_file)
+            cache_data = load_cache(log_file, known_nicks)
 
         if cache_data:
             merge_stats(global_stats, cache_data)
@@ -446,11 +1418,15 @@ def main(log_dir):
     )
 
     # Write HTML report
+    global_stats["generation_time"] = total_elapsed
     write_html_report(global_stats, path / "index.html")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} /path/to/logdir")
+        print(f"Usage: {sys.argv[0]} /path/to/logdir [config.cfg]")
         sys.exit(1)
+    cfg = sys.argv[2] if len(sys.argv) > 2 else None
+    if cfg:
+        load_config(cfg)
     main(sys.argv[1])
