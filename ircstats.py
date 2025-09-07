@@ -210,11 +210,23 @@ BRIDGE_NICKS = {
 }
 BRIDGE_MSG_RE = re.compile(r"^(?:\d*)?<@?([^>]+)>\s+(.+)$")
 
-BOT_NICKS = {
+DEFAULT_SERVICE_NICKS = {
+    "chanserv",
+    "nickserv",
+    "memoserv",
+    "operserv",
+    "hostserv",
+    "botserv",
+    "helpserv",
+    "global",
+}
+
+BOT_NICKS = set(DEFAULT_SERVICE_NICKS)
+BOT_NICKS.update(
     n.strip().lower()
     for n in os.environ.get("BOTNICKS", "").split(",")
     if n.strip()
-}
+)
 
 NICK_ALIASES = {}
 for pair in os.environ.get("NICKALIASES", "").split(","):

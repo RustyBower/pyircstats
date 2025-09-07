@@ -14,7 +14,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - ⏱️ Shows overall hourly activity and stacked per-user bars to visualize when conversations happen
 - 🧠 Intelligent random quote selection and "last seen" summaries
 - 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
-- 🤖 Ignore bot accounts via `BOTNICKS` so automated chatter doesn't skew stats
+- 🤖 Ignore typical Anope services (NickServ, ChanServ, etc.) and any extra bots via `BOTNICKS` so automated chatter doesn't skew stats
 - 🔁 Merge alternate nick spellings via `NICKALIASES` so renamed users share stats
 - 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time (action counts only include `/me` commands)
 - 🤬 Optional [`profanity-check`](https://pypi.org/project/profanity-check/) integration for smarter foul-language stats
@@ -49,8 +49,8 @@ python3 ircstats.py /path/to/your/logs/ myconfig.cfg
 # with bridge bots (comma-separated)
 BRIDGENICKS=matrixbridge,discordbot python3 ircstats.py /path/to/your/logs/
 
-# ignore bot accounts
-BOTNICKS=ChanServ,SomeBot python3 ircstats.py /path/to/your/logs/
+# ignore additional bot accounts (Anope services are skipped by default)
+BOTNICKS=SomeBot python3 ircstats.py /path/to/your/logs/
 
 # ignore additional common words
 IGNOREWORDS=foo,bar python3 ircstats.py /path/to/your/logs/
@@ -63,7 +63,8 @@ NICKALIASES=rc=rustycloud,rusty_=rustycloud python3 ircstats.py /path/to/your/lo
 
 ```ini
 [bots]
-nicks = ChanServ,SomeBot
+# additional bots beyond default services
+nicks = SomeBot
 
 [aliases]
 rc = rustycloud
