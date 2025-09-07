@@ -210,6 +210,12 @@ BRIDGE_NICKS = {
 }
 BRIDGE_MSG_RE = re.compile(r"^(?:\d*)?<@?([^>]+)>\s+(.+)$")
 
+BOT_NICKS = {
+    n.strip().lower()
+    for n in os.environ.get("BOTNICKS", "").split(",")
+    if n.strip()
+}
+
 CACHE_DIR = Path(".cache_ircstats")
 
 
@@ -306,10 +312,13 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
                 if not nick:
                     m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
                     if m:
-                        known.add(m.group("setter").lower())
+                        setter = m.group("setter").lower()
+                        if setter in BOT_NICKS:
+                            continue
+                        known.add(setter)
                     continue
                 nick, msg = handle_bridge(nick, msg)
-                if not nick:
+                if not nick or nick in BOT_NICKS:
                     continue
                 known.add(nick)
 
@@ -389,6 +398,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 if dt is None:
                     continue
                 setter = m.group("setter").lower()
+                if setter in BOT_NICKS:
+                    continue
                 topic = m.group("topic")
                 topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
                 continue
@@ -406,6 +417,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                     dt = None
                 victim = m.group("victim").lower()
                 kicker = m.group("kicker").lower()
+                if victim in BOT_NICKS or kicker in BOT_NICKS:
+                    continue
                 kicks_received[victim] += 1
                 kicks_given[kicker] += 1
                 if victim not in kick_examples:
@@ -415,11 +428,17 @@ def parse_log_file_with_nicks(log_file, known_nicks):
             m = LOG_JOIN_RE_OLD.match(line) or LOG_JOIN_RE_NEW.match(line)
             if m:
                 nick = m.group("nick").lower()
+                if nick in BOT_NICKS:
+                    continue
                 joins[nick] += 1
                 continue
 
             m = LOG_MODE_RE_OLD.match(line) or LOG_MODE_RE_NEW.match(line)
             if m:
+                setter = m.group("setter").lower()
+                target = m.group("target").lower()
+                if setter in BOT_NICKS or target in BOT_NICKS:
+                    continue
                 mode = m.group("mode")
                 if mode == "+o":
                     op_give_count += 1
@@ -448,7 +467,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 continue
 
             nick, msg = handle_bridge(nick, msg)
-            if not nick:
+            if not nick or nick in BOT_NICKS:
                 continue
 
             total_lines += 1
@@ -635,6 +654,7 @@ def save_cache(log_file, data):
     # topics is list of dicts - no datetime objects left, but just to be sure:
     serialized["topics"] = data["topics"]
     serialized["total_lines"] = data["total_lines"]
+    serialized["bot_nicks"] = sorted(BOT_NICKS)
 
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(serialized, f, indent=1)
@@ -647,6 +667,9 @@ def load_cache(log_file):
     try:
         with open(cache_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
+        if set(raw.get("bot_nicks", [])) != BOT_NICKS:
+            return None
+        raw.pop("bot_nicks", None)
         # Deserialize last_seen timestamps
         raw["last_seen"] = {k: datetime.datetime.fromisoformat(v) for k, v in raw.get("last_seen", {}).items()}
         # Convert per-user hour maps back to Counters

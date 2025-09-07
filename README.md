@@ -14,6 +14,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - ⏱️ Shows overall hourly activity and stacked per-user bars to visualize when conversations happen
 - 🧠 Intelligent random quote selection and "last seen" summaries
 - 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
+- 🤖 Ignore bot accounts via `BOTNICKS` so automated chatter doesn't skew stats
 - 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time (action counts only include `/me` commands)
 - 🤬 Optional [`profanity-check`](https://pypi.org/project/profanity-check/) integration for smarter foul-language stats
 
@@ -42,6 +43,9 @@ python3 ircstats.py /path/to/your/logs/
 
 # with bridge bots (comma-separated)
 BRIDGENICKS=matrixbridge,discordbot python3 ircstats.py /path/to/your/logs/
+
+# ignore bot accounts
+BOTNICKS=ChanServ,SomeBot python3 ircstats.py /path/to/your/logs/
 
 # ignore additional common words
 IGNOREWORDS=foo,bar python3 ircstats.py /path/to/your/logs/
@@ -75,7 +79,6 @@ Supported formats include:
 
 - Export CSV/JSON summaries
 - Per-user stat pages
-- Tagging known bots
 - Docker support
 
 ## License
