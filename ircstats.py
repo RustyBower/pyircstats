@@ -669,9 +669,6 @@ def write_html_report(global_stats, output_path):
     )
     output.append("</section>")
 
-    # Other interesting numbers
-    write_other_numbers(global_stats, output, channel)
-
     # Most Active Nicks table with stacked bars
     write_most_active_nicks(global_stats, output)
 
@@ -728,19 +725,23 @@ def write_html_report(global_stats, output_path):
     output.append("</table>")
     output.append("</section>")
 
+    # Other interesting numbers
+    write_other_numbers(global_stats, output, channel)
+
     # Latest topics
-    output.append("<section id='latest-topics'>")
-    output.append("<h2>Latest Topics</h2>")
-    output.append("<ul>")
-    latest_topics = sorted(
-        global_stats["topics"], key=lambda x: x["time"], reverse=True
-    )[:5]
-    for topic in latest_topics:
-        output.append(
-            f"<li><strong>{html.escape(topic['time'])}</strong> by <em>{html.escape(topic['setter'])}</em>: {html.escape(topic['topic'])}</li>"
-        )
-    output.append("</ul>")
-    output.append("</section>")
+    if global_stats["topics"]:
+        output.append("<section id='latest-topics'>")
+        output.append("<h2>Latest Topics</h2>")
+        output.append("<ul>")
+        latest_topics = sorted(
+            global_stats["topics"], key=lambda x: x["time"], reverse=True
+        )[:5]
+        for topic in latest_topics:
+            output.append(
+                f"<li><strong>{html.escape(topic['time'])}</strong> by <em>{html.escape(topic['setter'])}</em>: {html.escape(topic['topic'])}</li>"
+            )
+        output.append("</ul>")
+        output.append("</section>")
 
     output.append("</main>")
 
