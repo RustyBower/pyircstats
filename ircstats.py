@@ -336,13 +336,18 @@ def parse_log_file_with_nicks(log_file, known_nicks):
             user_hour_active[nick][dt.hour] += 1
 
             if is_action:
-                actions[nick] += 1
-                if nick not in action_examples:
-                    action_examples[nick] = f"* {nick} {msg}"
+                op_line = False
                 if "set +o" in msg or "sets mode +o" in msg:
                     op_give_count += 1
-                if "set -o" in msg or "sets mode -o" in msg:
+                    op_line = True
+                elif "set -o" in msg or "sets mode -o" in msg:
                     op_take_count += 1
+                    op_line = True
+
+                if not op_line:
+                    actions[nick] += 1
+                    if nick not in action_examples:
+                        action_examples[nick] = f"* {nick} {msg}"
 
             if nick == last_nick:
                 streak += 1

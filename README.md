@@ -14,7 +14,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - ⏱️ Shows overall hourly activity and stacked per-user bars to visualize when conversations happen
 - 🧠 Intelligent random quote selection and "last seen" summaries
 - 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
-- 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time
+- 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time (action counts only include `/me` commands)
 - 🤬 Optional [`profanity-check`](https://pypi.org/project/profanity-check/) integration for smarter foul-language stats
 
 ## Example Stats Output
