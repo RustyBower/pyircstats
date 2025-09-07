@@ -103,6 +103,16 @@ def relative_day_string(dt):
         return f"{diff} days ago"
     else:
         return dt.strftime("%Y-%m-%d")
+
+
+def hour_to_color(hour):
+    if 0 <= hour < 6:
+        return "#1e88e5"  # blue
+    if 6 <= hour < 12:
+        return "#e53935"  # red
+    if 12 <= hour < 18:
+        return "#fdd835"  # yellow
+    return "#43a047"  # green
 def build_known_nicks(log_dir, cache_file="known_nicks.json"):
     cache_path = Path(cache_file)
     if cache_path.exists():
@@ -322,34 +332,51 @@ def load_cache(log_file):
         return None
 
 
-def write_detailed_nick_stats(global_stats, output):
-    # Sort by lines desc
-    sorted_users = sorted(global_stats["lines_by_user"].items(), key=lambda x: x[1], reverse=True)[:20]
+def write_most_active_nicks(global_stats, output):
+    sorted_users = sorted(
+        global_stats["lines_by_user"].items(), key=lambda x: x[1], reverse=True
+    )[:10]
 
-    output.append("<h2>Detailed Nick Stats</h2>")
-    output.append("<table>")
-    output.append("<tr><th>Nick</th><th>Number of lines</th><th>When?</th><th>Last seen</th><th>Random quote</th></tr>")
+    output.append("<section id='most-active-nicks'>")
+    output.append("<h2>Most Active Nicks</h2>")
+    output.append(
+        "<table><tr><th>Nick</th><th>Number of lines</th><th>Activity</th><th>Last seen</th><th>Random quote</th></tr>"
+    )
 
     for nick, lines in sorted_users:
-        last_seen = global_stats["last_seen"].get(nick)
-        if last_seen:
-            when_str = relative_day_string(last_seen)
-            last_seen_str = last_seen.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            when_str = "unknown"
-            last_seen_str = "unknown"
+        hours = global_stats["user_hour_active"].get(nick, {})
+        total = sum(hours.values())
+        segments = []
+        if total:
+            groups = [
+                sum(hours.get(h, 0) for h in range(0, 6)),
+                sum(hours.get(h, 0) for h in range(6, 12)),
+                sum(hours.get(h, 0) for h in range(12, 18)),
+                sum(hours.get(h, 0) for h in range(18, 24)),
+            ]
+            for idx, count in enumerate(groups):
+                width = count / total * 100
+                segments.append(
+                    f"<div style='background:{hour_to_color(idx*6)};width:{width}%;height:10px'></div>"
+                )
+        activity_bar = (
+            f"<div style='display:flex;width:100%;height:10px'>{''.join(segments)}</div>"
+            if segments
+            else "<div style='height:10px'></div>"
+        )
 
+        last_seen_dt = global_stats["last_seen"].get(nick)
+        last_seen_str = (
+            relative_day_string(last_seen_dt) if last_seen_dt else "unknown"
+        )
         quotes = global_stats["messages"].get(nick, [])
         quote = random.choice(quotes) if quotes else ""
 
-        quote_escaped = html.escape(quote)
-        nick_escaped = html.escape(nick)
-
         output.append(
-            f'<tr><td>{nick_escaped}</td><td>{lines}</td><td>{when_str}</td><td>{last_seen_str}</td><td>"{quote_escaped}"</td></tr>'
+            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td>{activity_bar}</td><td>{html.escape(last_seen_str)}</td><td>\"{html.escape(quote)}\"</td></tr>"
         )
 
-    output.append("</table>")
+    output.append("</table></section>")
 
 
 def write_html_report(global_stats, output_path):
@@ -358,15 +385,6 @@ def write_html_report(global_stats, output_path):
         for k, v in items:
             rows.append(f"<tr><td>{html.escape(str(k))}</td><td>{v}</td></tr>")
         return "\n".join(rows)
-
-    def hour_to_color(hour):
-        if 0 <= hour < 6:
-            return "#1e88e5"  # blue
-        if 6 <= hour < 12:
-            return "#e53935"  # red
-        if 12 <= hour < 18:
-            return "#fdd835"  # yellow
-        return "#43a047"  # green
 
     output = []
 
@@ -453,39 +471,37 @@ def write_html_report(global_stats, output_path):
     output.append("</ul>")
     output.append("</section>")
 
-    # Most Active Nicks
-    output.append("<section id='most-active-nicks'>")
-    output.append("<h2>Most Active Nicks</h2>")
-    top_talkers = global_stats["lines_by_user"].most_common(10)
-    max_lines = top_talkers[0][1] if top_talkers else 0
-    output.append("<table>")
-    output.append(
-        "<tr><th>Nick</th><th>Lines</th><th>Words</th><th>Last seen</th><th>When?</th></tr>"
+    # Channel activity by hour
+    max_hour = (
+        max(global_stats["hours_active"].values())
+        if global_stats["hours_active"]
+        else 0
     )
-    for nick, lines in top_talkers:
-        width = (lines / max_lines * 100) if max_lines else 0
-        hours = global_stats["user_hour_active"].get(nick, {})
-        peak_hour = max(hours, key=hours.get) if hours else 0
-        color = hour_to_color(peak_hour)
-        line_bar = f"<div style='background:{color};height:10px;width:{width}%;'></div>"
-        words = global_stats["words_by_user"].get(nick, 0)
-        last_seen_dt = global_stats["last_seen"].get(nick)
-        last_seen_str = relative_day_string(last_seen_dt) if last_seen_dt else "unknown"
-        max_hour_count = max(hours.values()) if hours else 0
-        segments = []
-        for h in range(24):
-            cnt = hours.get(h, 0)
-            h_height = (cnt / max_hour_count * 10) if max_hour_count else 0
-            seg_color = hour_to_color(h)
-            segments.append(
-                f"<div style='display:inline-block;width:4px;height:{h_height}px;background:{seg_color}'></div>"
-            )
-        when_bar = f"<div style='height:10px'>{''.join(segments)}</div>"
+    total_hour_lines = sum(global_stats["hours_active"].values())
+    output.append("<section id='activity-by-hour'>")
+    output.append("<h2>Most Active Times</h2>")
+    output.append("<div style='display:flex;align-items:flex-end;height:120px'>")
+    for hour in range(24):
+        count = global_stats["hours_active"].get(hour, 0)
+        height = (count / max_hour * 100) if max_hour else 0
+        percent = (count / total_hour_lines * 100) if total_hour_lines else 0
+        color = hour_to_color(hour)
         output.append(
-            f"<tr><td>{html.escape(nick)}</td><td>{lines}{line_bar}</td><td>{words}</td><td>{last_seen_str}</td><td>{when_bar}</td></tr>"
+            f"<div style='flex:1;text-align:center'><div style='font-size:smaller'>{percent:.1f}%</div><div style='margin:0 1px;background:{color};height:{height}%'></div><div style='font-size:smaller'>{hour:02d}</div></div>"
         )
-    output.append("</table>")
+    output.append("</div>")
+    output.append(
+        "<div style='display:flex;justify-content:space-between;font-size:smaller;margin-top:4px'>"
+        "<span style='color:#1e88e5'>0-5</span>"
+        "<span style='color:#e53935'>6-11</span>"
+        "<span style='color:#fdd835'>12-17</span>"
+        "<span style='color:#43a047'>18-23</span>"
+        "</div>"
+    )
     output.append("</section>")
+
+    # Most Active Nicks table with stacked bars
+    write_most_active_nicks(global_stats, output)
 
     # Most used words
     output.append("<section id='top-words'>")
@@ -542,25 +558,6 @@ def write_html_report(global_stats, output_path):
     output.append("</ul>")
     output.append("</section>")
 
-    # Activity by hour
-    output.append("<section id='activity-by-hour'>")
-    output.append("<h2>Most Active Times</h2>")
-    output.append("<table><tr><th>Hour</th><th>Messages</th><th></th></tr>")
-    max_hour = (
-        max(global_stats["hours_active"].values())
-        if global_stats["hours_active"]
-        else 0
-    )
-    for hour in range(24):
-        count = global_stats["hours_active"].get(hour, 0)
-        width = (count / max_hour * 100) if max_hour else 0
-        color = hour_to_color(hour)
-        output.append(
-            f"<tr><td>{hour:02d}:00</td><td>{count}</td><td><div style='background:{color};height:10px;width:{width}%;'></div></td></tr>"
-        )
-    output.append("</table>")
-    output.append("</section>")
-
     # Activity by day
     output.append("<section id='activity-by-day'>")
     output.append("<h2>Activity by Day</h2>")
@@ -570,11 +567,6 @@ def write_html_report(global_stats, output_path):
         count = global_stats["dow_active"].get(i, 0)
         output.append(f"<tr><td>{day}</td><td>{count}</td></tr>")
     output.append("</table>")
-    output.append("</section>")
-
-    # Detailed nick stats table
-    output.append("<section id='nick-details'>")
-    write_detailed_nick_stats(global_stats, output)
     output.append("</section>")
 
     output.append("</main></body></html>")

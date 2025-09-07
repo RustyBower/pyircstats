@@ -11,6 +11,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 🚫 Filters non-nicks and common stopwords from mention stats
 - ⚡ Caches per-log results for fast reprocessing
 - 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI, centered summary header, and color-coded activity charts
+- ⏱️ Shows overall hourly activity and stacked per-user bars to visualize when conversations happen
 - 🧠 Intelligent random quote selection and "last seen" summaries
 - 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
 
