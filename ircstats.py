@@ -30,8 +30,6 @@ BRIDGE_MSG_RE = re.compile(r"^(?:\d*)?<@?([^>]+)>\s+(.+)$")
 
 CACHE_DIR = Path(".cache_ircstats")
 
-BLACKLIST = {"like", "shit", "the", "a", "you", "and", "to", "for", "of", "in", "on", "is", "it", "i", "we", "me", "my"}
-
 
 def clean_bridge_nick(nick):
     nick = "".join(
@@ -105,12 +103,6 @@ def relative_day_string(dt):
         return f"{diff} days ago"
     else:
         return dt.strftime("%Y-%m-%d")
-
-
-def is_valid_nick(nick):
-    return nick.lower() not in BLACKLIST
-
-
 def build_known_nicks(log_dir, cache_file="known_nicks.json"):
     cache_path = Path(cache_file)
     if cache_path.exists():
@@ -135,8 +127,7 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
                 nick, msg = handle_bridge(nick, msg)
                 if not nick:
                     continue
-                if is_valid_nick(nick):
-                    known.add(nick)
+                known.add(nick)
 
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(sorted(known), f, indent=2)
@@ -220,7 +211,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 wclean = word.lower().strip(",.:;!?()[]{}<>\"'")
                 if wclean in known_nicks and wclean != nick:
                     mentions_by_user[nick][wclean] += 1
-                if wclean and wclean not in BLACKLIST and wclean.isalpha():
+                if wclean and wclean.isalpha():
                     word_counts[wclean] += 1
 
             # Extract URLs
