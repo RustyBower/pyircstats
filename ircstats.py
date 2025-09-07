@@ -171,6 +171,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
     topics = []
     hours_active = Counter()
     dow_active = Counter()
+    user_hour_active = defaultdict(Counter)
     word_counts = Counter()
     smiley_counts = Counter()
     total_lines = 0
@@ -232,6 +233,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
 
             hours_active[dt.hour] += 1
             dow_active[dt.weekday()] += 1
+            user_hour_active[nick][dt.hour] += 1
 
     return {
         "lines_by_user": lines_by_user,
@@ -246,6 +248,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
         "total_lines": total_lines,
         "last_seen": last_seen_by_user,
         "messages": messages_by_user,
+        "user_hour_active": user_hour_active,
     }
 
 
@@ -261,6 +264,9 @@ def merge_stats(global_stats, file_stats):
     ]:
         if k in file_stats:
             global_stats[k].update(file_stats[k])
+    # merge per-user hourly activity
+    for user, hours in file_stats.get("user_hour_active", {}).items():
+        global_stats["user_hour_active"][user].update(hours)
     # merge mentions
     for user, mentions in file_stats["mentions_by_user"].items():
         global_stats["mentions_by_user"][user].update(mentions)
@@ -312,7 +318,11 @@ def load_cache(log_file):
             raw = json.load(f)
         # Deserialize last_seen timestamps
         raw["last_seen"] = {k: datetime.datetime.fromisoformat(v) for k, v in raw.get("last_seen", {}).items()}
-        # messages and others remain as is
+        # Convert per-user hour maps back to Counters
+        raw["user_hour_active"] = {
+            user: Counter({int(h): c for h, c in hours.items()})
+            for user, hours in raw.get("user_hour_active", {}).items()
+        }
         return raw
     except Exception:
         return None
@@ -355,6 +365,9 @@ def write_html_report(global_stats, output_path):
             rows.append(f"<tr><td>{html.escape(str(k))}</td><td>{v}</td></tr>")
         return "\n".join(rows)
 
+    def hour_to_color(hour):
+        return f"hsl({int(hour / 24 * 360)},70%,50%)"
+
     output = []
 
     output.append("<!DOCTYPE html>")
@@ -369,8 +382,6 @@ def write_html_report(global_stats, output_path):
     body { font-family: Verdana, Arial, sans-serif; margin: 0; background: #f5f5f5; color: #333; }
     header { background: linear-gradient(90deg, #263238, #37474f); color: #fff; padding: 20px 0; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     header h1 { margin: 0; font-size: 2rem; }
-    nav a { color: #fff; margin: 0 10px; text-decoration: none; font-weight: bold; }
-    nav a:hover { text-decoration: underline; }
     main { max-width: 1000px; margin: 30px auto; padding: 0 15px; }
     section { margin-bottom: 40px; }
     h2 { border-bottom: 2px solid #ccc; padding-bottom: 4px; color: #263238; }
@@ -384,22 +395,27 @@ def write_html_report(global_stats, output_path):
     """
     )
     output.append("</head><body>")
-    output.append(
-        "<header><h1>IRC Channel Statistics</h1>"
-        "<nav>"
-        "<a href='#summary'>Summary</a> | "
-        "<a href='#top-talkers'>Top Talkers</a> | "
-        "<a href='#wordiest-users'>Wordiest Users</a> | "
-        "<a href='#top-words'>Top Words</a> | "
-        "<a href='#most-mentioned'>Most Mentioned</a> | "
-        "<a href='#top-urls'>Top URLs</a> | "
-        "<a href='#smiley-stats'>Smileys</a> | "
-        "<a href='#latest-topics'>Topics</a> | "
-        "<a href='#activity-by-hour'>Hourly Activity</a> | "
-        "<a href='#activity-by-day'>Daily Activity</a> | "
-        "<a href='#nick-details'>Nick Stats</a>"
-        "</nav></header>"
+
+    channel = os.environ.get("CHANNEL_NAME", "#channel")
+    network = os.environ.get("NETWORK_NAME", "IRC")
+    author = os.environ.get("AUTHOR_NAME", "Rusty")
+    generated_on = datetime.datetime.now().strftime("%A %d %B %Y - %H:%M:%S")
+
+    log_dates = global_stats.get("log_dates", set())
+    reporting_days = (
+        (max(log_dates) - min(log_dates)).days + 1 if log_dates else 0
     )
+    active_nicks = len(global_stats["lines_by_user"])
+
+    header_lines = [
+        f"<h1>{html.escape(channel)} @ {html.escape(network)} stats by {html.escape(author)}</h1>",
+        f"<p>Statistics generated on {generated_on}</p>",
+    ]
+    if reporting_days and active_nicks:
+        header_lines.append(
+            f"<p>During this {reporting_days}-day reporting period, a total of {active_nicks} different nicks were represented on {html.escape(channel)}.</p>"
+        )
+    output.append("<header>" + "".join(header_lines) + "</header>")
     output.append("<main>")
 
     total_lines = global_stats["total_lines"]
@@ -446,8 +462,11 @@ def write_html_report(global_stats, output_path):
     output.append("<tr><th>Nick</th><th>Lines</th><th></th></tr>")
     for nick, lines in top_talkers:
         width = (lines / max_lines * 100) if max_lines else 0
+        hours = global_stats["user_hour_active"].get(nick, {})
+        peak_hour = max(hours, key=hours.get) if hours else 0
+        color = hour_to_color(peak_hour)
         output.append(
-            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td><div style='background:#90caf9;height:10px;width:{width}%;'></div></td></tr>"
+            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td><div style='background:{color};height:10px;width:{width}%;'></div></td></tr>"
         )
     output.append("</table>")
     output.append("</section>")
@@ -510,11 +529,20 @@ def write_html_report(global_stats, output_path):
 
     # Activity by hour
     output.append("<section id='activity-by-hour'>")
-    output.append("<h2>Activity by Hour</h2>")
-    output.append("<table><tr><th>Hour</th><th>Messages</th></tr>")
+    output.append("<h2>Most Active Times</h2>")
+    output.append("<table><tr><th>Hour</th><th>Messages</th><th></th></tr>")
+    max_hour = (
+        max(global_stats["hours_active"].values())
+        if global_stats["hours_active"]
+        else 0
+    )
     for hour in range(24):
         count = global_stats["hours_active"].get(hour, 0)
-        output.append(f"<tr><td>{hour:02d}:00</td><td>{count}</td></tr>")
+        width = (count / max_hour * 100) if max_hour else 0
+        color = hour_to_color(hour)
+        output.append(
+            f"<tr><td>{hour:02d}:00</td><td>{count}</td><td><div style='background:{color};height:10px;width:{width}%;'></div></td></tr>"
+        )
     output.append("</table>")
     output.append("</section>")
 
@@ -564,6 +592,7 @@ def main(log_dir):
         "last_seen": {},
         "messages": defaultdict(list),
         "log_dates": set(),
+        "user_hour_active": defaultdict(Counter),
     }
 
     total_start = time.perf_counter()
