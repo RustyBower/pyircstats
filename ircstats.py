@@ -175,6 +175,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
     user_hour_active = defaultdict(Counter)
     word_counts = Counter()
     smiley_counts = Counter()
+    word_last_used = {}
+    mention_last_by = {}
     total_lines = 0
 
     # Determine current_date for partial timestamp logs
@@ -221,8 +223,10 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 wclean = word.lower().strip(",.:;!?()[]{}<>\"'")
                 if wclean in known_nicks and wclean != nick:
                     mentions_by_user[nick][wclean] += 1
+                    mention_last_by[wclean] = (dt, nick)
                 if wclean and wclean.isalpha():
                     word_counts[wclean] += 1
+                    word_last_used[wclean] = (dt, nick)
 
             # Extract URLs
             for url in URL_RE.findall(msg):
@@ -250,6 +254,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
         "last_seen": last_seen_by_user,
         "messages": messages_by_user,
         "user_hour_active": user_hour_active,
+        "word_last_used": word_last_used,
+        "mention_last_by": mention_last_by,
     }
 
 
@@ -284,6 +290,18 @@ def merge_stats(global_stats, file_stats):
         combined = global_stats["messages"][nick] + msgs
         global_stats["messages"][nick] = combined[-50:]
 
+    # merge word last used info
+    for word, (dt, nick) in file_stats.get("word_last_used", {}).items():
+        prev = global_stats["word_last_used"].get(word)
+        if not prev or dt > prev[0]:
+            global_stats["word_last_used"][word] = (dt, nick)
+
+    # merge mention last by info
+    for word, (dt, nick) in file_stats.get("mention_last_by", {}).items():
+        prev = global_stats["mention_last_by"].get(word)
+        if not prev or dt > prev[0]:
+            global_stats["mention_last_by"][word] = (dt, nick)
+
 
 def save_cache(log_file, data):
     CACHE_DIR.mkdir(exist_ok=True)
@@ -296,7 +314,12 @@ def save_cache(log_file, data):
 
     serialized = {}
     for k, v in data.items():
-        if isinstance(v, dict) or isinstance(v, Counter) or isinstance(v, defaultdict):
+        if k in ["word_last_used", "mention_last_by"]:
+            serialized[k] = {
+                word: {"time": val[0].isoformat(), "nick": val[1]}
+                for word, val in v.items()
+            }
+        elif isinstance(v, dict) or isinstance(v, Counter) or isinstance(v, defaultdict):
             # serialize all datetime values inside nested dicts
             serialized[k] = {user: serialize_value(val) for user, val in v.items()}
         else:
@@ -327,6 +350,14 @@ def load_cache(log_file):
         # Ensure hourly and weekday activity use integer keys
         raw["hours_active"] = Counter({int(h): c for h, c in raw.get("hours_active", {}).items()})
         raw["dow_active"] = Counter({int(d): c for d, c in raw.get("dow_active", {}).items()})
+        raw["word_last_used"] = {
+            w: (datetime.datetime.fromisoformat(v["time"]), v["nick"])
+            for w, v in raw.get("word_last_used", {}).items()
+        }
+        raw["mention_last_by"] = {
+            w: (datetime.datetime.fromisoformat(v["time"]), v["nick"])
+            for w, v in raw.get("mention_last_by", {}).items()
+        }
         return raw
     except Exception:
         return None
@@ -337,7 +368,7 @@ def write_most_active_nicks(global_stats, output):
         global_stats["lines_by_user"].items(), key=lambda x: x[1], reverse=True
     )[:10]
 
-    output.append("<section id='most-active-nicks'>")
+    output.append("<section id='most-active-nicks' style='max-width:800px;margin:auto'>")
     output.append("<h2>Most Active Nicks</h2>")
     output.append(
         "<table><tr><th>Nick</th><th>Number of lines</th><th>Activity</th><th>Last seen</th><th>Random quote</th></tr>"
@@ -373,7 +404,7 @@ def write_most_active_nicks(global_stats, output):
         quote = random.choice(quotes) if quotes else ""
 
         output.append(
-            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td>{activity_bar}</td><td>{html.escape(last_seen_str)}</td><td>\"{html.escape(quote)}\"</td></tr>"
+            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td>{activity_bar}</td><td>{html.escape(last_seen_str)}</td><td class='quote'>\"{html.escape(quote)}\"</td></tr>"
         )
 
     output.append("</table></section>")
@@ -409,6 +440,7 @@ def write_html_report(global_stats, output_path):
     tr:nth-child(even) { background-color: #f0f8ff; }
     tr:hover { background-color: #e1f5fe; }
     ul { background: #fff; padding: 15px; border: 1px solid #ddd; }
+    td.quote { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     </style>
     """
     )
@@ -436,41 +468,6 @@ def write_html_report(global_stats, output_path):
     output.append("<header>" + "".join(header_lines) + "</header>")
     output.append("<main>")
 
-    total_lines = global_stats["total_lines"]
-    active_nicks = len(global_stats["lines_by_user"])
-    log_dates = global_stats.get("log_dates", set())
-    num_days = len(log_dates)
-    first_day = min(log_dates).strftime("%Y-%m-%d") if log_dates else ""
-    last_day = max(log_dates).strftime("%Y-%m-%d") if log_dates else ""
-    avg_per_day = total_lines / num_days if num_days else 0
-    most_active_day = ""
-    most_active_count = 0
-    if global_stats["dow_active"]:
-        idx, most_active_count = max(
-            global_stats["dow_active"].items(), key=lambda x: x[1]
-        )
-        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        most_active_day = days[int(idx)]
-
-    output.append("<section id='summary'>")
-    output.append("<h2>Summary</h2>")
-    output.append("<ul>")
-    output.append(f"<li>Total lines: {total_lines}</li>")
-    if num_days:
-        output.append(
-            f"<li>From {first_day} to {last_day} ({num_days} days)</li>"
-        )
-        output.append(
-            f"<li>Average lines per day: {avg_per_day:.2f}</li>"
-        )
-    output.append(f"<li>Active nicks: {active_nicks}</li>")
-    if most_active_day:
-        output.append(
-            f"<li>Most active day: {most_active_day} ({most_active_count} lines)</li>"
-        )
-    output.append("</ul>")
-    output.append("</section>")
-
     # Channel activity by hour
     max_hour = (
         max(global_stats["hours_active"].values())
@@ -487,7 +484,11 @@ def write_html_report(global_stats, output_path):
         percent = (count / total_hour_lines * 100) if total_hour_lines else 0
         color = hour_to_color(hour)
         output.append(
-            f"<div style='flex:1;text-align:center'><div style='font-size:smaller'>{percent:.1f}%</div><div style='margin:0 1px;background:{color};height:{height}%'></div><div style='font-size:smaller'>{hour:02d}</div></div>"
+            "<div style='flex:1;margin:0 1px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center'>"
+            f"<div style='font-size:smaller'>{percent:.1f}%</div>"
+            f"<div style='background:{color};height:{height}%;width:100%'></div>"
+            f"<div style='font-size:smaller'>{hour:02d}</div>"
+            "</div>"
         )
     output.append("</div>")
     output.append(
@@ -506,8 +507,12 @@ def write_html_report(global_stats, output_path):
     # Most used words
     output.append("<section id='top-words'>")
     output.append("<h2>Most Used Words</h2>")
-    output.append("<table>")
-    output.append(build_rows(global_stats["word_counts"].most_common(10), "Word", "Count"))
+    output.append("<table><tr><th>Word</th><th>Count</th><th>Last used by</th></tr>")
+    for word, cnt in global_stats["word_counts"].most_common(10):
+        last_by = global_stats["word_last_used"].get(word, (None, "unknown"))[1]
+        output.append(
+            f"<tr><td>{html.escape(word)}</td><td>{cnt}</td><td>{html.escape(last_by)}</td></tr>"
+        )
     output.append("</table>")
     output.append("</section>")
 
@@ -520,8 +525,12 @@ def write_html_report(global_stats, output_path):
 
     output.append("<section id='most-mentioned'>")
     output.append("<h2>Most Mentioned (by all users)</h2>")
-    output.append("<table>")
-    output.append(build_rows(aggregate_mentions.most_common(10), "Nick", "Mentions"))
+    output.append("<table><tr><th>Nick</th><th>Mentions</th><th>Last mentioned by</th></tr>")
+    for nick, cnt in aggregate_mentions.most_common(10):
+        last_by = global_stats["mention_last_by"].get(nick, (None, "unknown"))[1]
+        output.append(
+            f"<tr><td>{html.escape(nick)}</td><td>{cnt}</td><td>{html.escape(last_by)}</td></tr>"
+        )
     output.append("</table>")
     output.append("</section>")
 
@@ -558,17 +567,6 @@ def write_html_report(global_stats, output_path):
     output.append("</ul>")
     output.append("</section>")
 
-    # Activity by day
-    output.append("<section id='activity-by-day'>")
-    output.append("<h2>Activity by Day</h2>")
-    output.append("<table><tr><th>Day</th><th>Messages</th></tr>")
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    for i, day in enumerate(days):
-        count = global_stats["dow_active"].get(i, 0)
-        output.append(f"<tr><td>{day}</td><td>{count}</td></tr>")
-    output.append("</table>")
-    output.append("</section>")
-
     output.append("</main></body></html>")
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -600,6 +598,8 @@ def main(log_dir):
         "messages": defaultdict(list),
         "log_dates": set(),
         "user_hour_active": defaultdict(Counter),
+        "word_last_used": {},
+        "mention_last_by": {},
     }
 
     total_start = time.perf_counter()
