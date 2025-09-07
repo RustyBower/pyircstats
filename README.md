@@ -7,7 +7,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 📅 Parses daily `.log` files in ZNC or EnergyMech format  
 - 🔎 Extracts nick activity, mentions, quotes, and last seen  
 - 💬 Tracks topics, URLs, and Discord relays
-- 📝 Counts common words, smileys, and daily activity trends, showing who last used top words and who last mentioned each nick
+- 📝 Counts common words, smileys, and daily activity trends, showing who last used top words (excluding nicknames) and who last mentioned each nick
 - 🚫 Skips common stop words like "the" and "and" in top-word stats (extend via `IGNOREWORDS`)
 - ⚡ Caches per-log results for fast reprocessing
 - 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI, centered summary header, and color-coded activity charts
@@ -15,6 +15,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 🧠 Intelligent random quote selection and "last seen" summaries
 - 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
 - 🤖 Ignore bot accounts via `BOTNICKS` so automated chatter doesn't skew stats
+- 🔁 Merge alternate nick spellings via `NICKALIASES` so renamed users share stats
 - 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time (action counts only include `/me` commands)
 - 🤬 Optional [`profanity-check`](https://pypi.org/project/profanity-check/) integration for smarter foul-language stats
 
@@ -49,6 +50,9 @@ BOTNICKS=ChanServ,SomeBot python3 ircstats.py /path/to/your/logs/
 
 # ignore additional common words
 IGNOREWORDS=foo,bar python3 ircstats.py /path/to/your/logs/
+
+# merge nick aliases
+NICKALIASES=rc=rustycloud,rusty_=rustycloud python3 ircstats.py /path/to/your/logs/
 ```
 
 This will:

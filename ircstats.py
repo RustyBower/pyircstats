@@ -216,6 +216,19 @@ BOT_NICKS = {
     if n.strip()
 }
 
+NICK_ALIASES = {}
+for pair in os.environ.get("NICKALIASES", "").split(","):
+    if "=" in pair:
+        alias, canonical = pair.split("=", 1)
+        alias = alias.strip().lower()
+        canonical = canonical.strip().lower()
+        if alias and canonical:
+            NICK_ALIASES[alias] = canonical
+
+
+def canonical_nick(nick: str) -> str:
+    return NICK_ALIASES.get(nick.lower(), nick.lower())
+
 CACHE_DIR = Path(".cache_ircstats")
 
 
@@ -292,11 +305,18 @@ def hour_to_color(hour):
     return "#43a047"  # green
 def build_known_nicks(log_dir, cache_file="known_nicks.json"):
     cache_path = Path(cache_file)
+    alias_sig = dict(sorted(NICK_ALIASES.items()))
     if cache_path.exists():
         with open(cache_path, "r", encoding="utf-8") as f:
-            known = set(json.load(f))
-        print(f"Loaded {len(known)} known nicks from cache.")
-        return known
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("aliases") == alias_sig:
+            known = set(data.get("nicks", []))
+            print(f"Loaded {len(known)} known nicks from cache.")
+            return known
+        elif isinstance(data, list) and not NICK_ALIASES:
+            known = set(data)
+            print(f"Loaded {len(known)} known nicks from cache.")
+            return known
 
     known = set()
     path = Path(log_dir)
@@ -312,18 +332,21 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
                 if not nick:
                     m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
                     if m:
-                        setter = m.group("setter").lower()
+                        setter = canonical_nick(m.group("setter").lower())
                         if setter in BOT_NICKS:
                             continue
                         known.add(setter)
                     continue
                 nick, msg = handle_bridge(nick, msg)
-                if not nick or nick in BOT_NICKS:
+                if not nick:
+                    continue
+                nick = canonical_nick(nick)
+                if nick in BOT_NICKS:
                     continue
                 known.add(nick)
 
     with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(sorted(known), f, indent=2)
+        json.dump({"nicks": sorted(known), "aliases": alias_sig}, f, indent=2)
     print(f"Built known nicks list with {len(known)} entries and cached to {cache_path}")
     return known
 
@@ -397,7 +420,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                     continue
                 if dt is None:
                     continue
-                setter = m.group("setter").lower()
+                setter = canonical_nick(m.group("setter").lower())
                 if setter in BOT_NICKS:
                     continue
                 topic = m.group("topic")
@@ -415,8 +438,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                         dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
                 except Exception:
                     dt = None
-                victim = m.group("victim").lower()
-                kicker = m.group("kicker").lower()
+                victim = canonical_nick(m.group("victim").lower())
+                kicker = canonical_nick(m.group("kicker").lower())
                 if victim in BOT_NICKS or kicker in BOT_NICKS:
                     continue
                 kicks_received[victim] += 1
@@ -427,7 +450,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
 
             m = LOG_JOIN_RE_OLD.match(line) or LOG_JOIN_RE_NEW.match(line)
             if m:
-                nick = m.group("nick").lower()
+                nick = canonical_nick(m.group("nick").lower())
                 if nick in BOT_NICKS:
                     continue
                 joins[nick] += 1
@@ -435,8 +458,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
 
             m = LOG_MODE_RE_OLD.match(line) or LOG_MODE_RE_NEW.match(line)
             if m:
-                setter = m.group("setter").lower()
-                target = m.group("target").lower()
+                setter = canonical_nick(m.group("setter").lower())
+                target = canonical_nick(m.group("target").lower())
                 if setter in BOT_NICKS or target in BOT_NICKS:
                     continue
                 mode = m.group("mode")
@@ -467,7 +490,10 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 continue
 
             nick, msg = handle_bridge(nick, msg)
-            if not nick or nick in BOT_NICKS:
+            if not nick:
+                continue
+            nick = canonical_nick(nick)
+            if nick in BOT_NICKS:
                 continue
 
             total_lines += 1
@@ -486,11 +512,12 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 wclean = word.lower().strip(",.:;!?()[]{}<>\"'")
                 if not wclean:
                     continue
-                if wclean in known_nicks and wclean != nick:
-                    mentions_by_user[nick][wclean] += 1
-                    mention_last_by[wclean] = (dt, nick)
+                wnick = canonical_nick(wclean)
+                if wnick in known_nicks and wnick != nick:
+                    mentions_by_user[nick][wnick] += 1
+                    mention_last_by[wnick] = (dt, nick)
                 if wclean.isalpha():
-                    if wclean not in STOP_WORDS:
+                    if wclean not in STOP_WORDS and wnick not in known_nicks:
                         word_counts[wclean] += 1
                         word_last_used[wclean] = (dt, nick)
                     if is_profane(wclean):
@@ -655,12 +682,13 @@ def save_cache(log_file, data):
     serialized["topics"] = data["topics"]
     serialized["total_lines"] = data["total_lines"]
     serialized["bot_nicks"] = sorted(BOT_NICKS)
+    serialized["nick_aliases"] = dict(sorted(NICK_ALIASES.items()))
 
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(serialized, f, indent=1)
 
 
-def load_cache(log_file):
+def load_cache(log_file, known_nicks):
     cache_path = CACHE_DIR / (log_file.stem + ".json")
     if not cache_path.exists():
         return None
@@ -669,7 +697,10 @@ def load_cache(log_file):
             raw = json.load(f)
         if set(raw.get("bot_nicks", [])) != BOT_NICKS:
             return None
+        if raw.get("nick_aliases", {}) != dict(sorted(NICK_ALIASES.items())):
+            return None
         raw.pop("bot_nicks", None)
+        raw.pop("nick_aliases", None)
         # Deserialize last_seen timestamps
         raw["last_seen"] = {k: datetime.datetime.fromisoformat(v) for k, v in raw.get("last_seen", {}).items()}
         # Convert per-user hour maps back to Counters
@@ -692,13 +723,13 @@ def load_cache(log_file):
             {
                 w: c
                 for w, c in raw.get("word_counts", {}).items()
-                if w not in STOP_WORDS
+                if w not in STOP_WORDS and w not in known_nicks
             }
         )
         raw["word_last_used"] = {
             w: v
             for w, v in raw.get("word_last_used", {}).items()
-            if w not in STOP_WORDS
+            if w not in STOP_WORDS and w not in known_nicks
         }
         for k in [
             "kicks_received",
@@ -1129,7 +1160,7 @@ def main(log_dir):
 
         cache_data = None
         if file_date < today:
-            cache_data = load_cache(log_file)
+            cache_data = load_cache(log_file, known_nicks)
 
         if cache_data:
             merge_stats(global_stats, cache_data)
