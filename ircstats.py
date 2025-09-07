@@ -723,7 +723,7 @@ def write_most_active_nicks(global_stats, output):
         global_stats["lines_by_user"].items(), key=lambda x: x[1], reverse=True
     )[:10]
 
-    output.append("<section id='most-active-nicks' style='max-width:800px;margin:auto'>")
+    output.append("<section id='most-active-nicks'>")
     output.append("<h2>Most Active Nicks</h2>")
     output.append(
         "<table><tr><th>Nick</th><th>Number of lines</th><th>Activity</th><th>Last seen</th><th>Random quote</th></tr>"
@@ -794,8 +794,7 @@ def write_html_report(global_stats, output_path):
     th { background: #263238; color: #fff; }
     tr:nth-child(even) { background-color: #f0f8ff; }
     tr:hover { background-color: #e1f5fe; }
-    ul { background: #fff; padding: 15px; border: 1px solid #ddd; }
-    td.quote { max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    td.quote { white-space: normal; word-break: break-word; }
     </style>
     """
     )
@@ -919,15 +918,15 @@ def write_html_report(global_stats, output_path):
     if global_stats["topics"]:
         output.append("<section id='latest-topics'>")
         output.append("<h2>Latest Topics</h2>")
-        output.append("<ul>")
+        output.append("<table><tr><th>Time</th><th>Setter</th><th>Topic</th></tr>")
         latest_topics = sorted(
             global_stats["topics"], key=lambda x: x["time"], reverse=True
         )[:5]
         for topic in latest_topics:
             output.append(
-                f"<li><strong>{html.escape(topic['time'])}</strong> by <em>{html.escape(topic['setter'])}</em>: {html.escape(topic['topic'])}</li>"
+                f"<tr><td>{html.escape(topic['time'])}</td><td>{html.escape(topic['setter'])}</td><td>{html.escape(topic['topic'])}</td></tr>"
             )
-        output.append("</ul>")
+        output.append("</table>")
         output.append("</section>")
 
     output.append("</main>")
