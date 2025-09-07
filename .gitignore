@@ -1,0 +1,38 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+ENV/
+.env/
+*.env
+
+# IDE files
+.vscode/
+.idea/
+
+# Log files
+*.log
+
+# Python bytecode
+*.pyo
+*.pyd
+
+# Test / coverage files
+.coverage
+htmlcov/
+.coverage.*
+.pytest_cache/
+
+# Misc
+.DS_Store
+Thumbs.db
+known_nicks.json
