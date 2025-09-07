@@ -9,7 +9,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 💬 Tracks topics, URLs, and Discord relays  
 - 🚫 Filters non-nicks and common stopwords from mention stats  
 - ⚡ Caches per-log results for fast reprocessing  
-- 🌐 Generates a clean, single-file HTML report (`index.html`)  
+- 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI
 - 🧠 Intelligent random quote selection and "last seen" summaries  
 
 ## Example Stats Output

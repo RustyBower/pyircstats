@@ -306,48 +306,65 @@ def write_html_report(global_stats, output_path):
     output.append(
         """
     <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #f8f9fa; color: #212529; }
-    h1, h2 { border-bottom: 2px solid #343a40; padding-bottom: 6px; }
-    table { border-collapse: collapse; width: 100%; max-width: 800px; margin-bottom: 30px; }
-    th, td { border: 1px solid #dee2e6; padding: 8px 12px; text-align: left; }
-    th { background-color: #343a40; color: white; }
-    tr:nth-child(even) { background-color: #e9ecef; }
-    ul { max-width: 800px; }
+    body { font-family: Verdana, Arial, sans-serif; margin: 0; background: #f5f5f5; color: #333; }
+    header { background: linear-gradient(90deg, #263238, #37474f); color: #fff; padding: 20px 0; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    header h1 { margin: 0; font-size: 2rem; }
+    nav a { color: #fff; margin: 0 10px; text-decoration: none; font-weight: bold; }
+    nav a:hover { text-decoration: underline; }
+    main { max-width: 1000px; margin: 30px auto; padding: 0 15px; }
+    section { margin-bottom: 40px; }
+    h2 { border-bottom: 2px solid #ccc; padding-bottom: 4px; color: #263238; }
+    table { border-collapse: collapse; width: 100%; background: #fff; margin-top: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+    th { background: #263238; color: #fff; }
+    tr:nth-child(even) { background-color: #f0f8ff; }
+    tr:hover { background-color: #e1f5fe; }
+    ul { background: #fff; padding: 15px; border: 1px solid #ddd; }
     </style>
     """
     )
     output.append("</head><body>")
-    output.append("<h1>IRC Channel Statistics</h1>")
+    output.append("<header><h1>IRC Channel Statistics</h1>" "<nav>" "<a href='#top-talkers'>Top Talkers</a> | " "<a href='#wordiest-users'>Wordiest Users</a> | " "<a href='#most-mentioned'>Most Mentioned</a> | " "<a href='#top-urls'>Top URLs</a> | " "<a href='#latest-topics'>Topics</a> | " "<a href='#activity-by-hour'>Activity</a> | " "<a href='#nick-details'>Nick Stats</a>" "</nav></header>")
+    output.append("<main>")
 
     # Top Talkers (lines)
+    output.append("<section id='top-talkers'>")
     output.append("<h2>Top Talkers (Lines)</h2>")
     output.append("<table>")
     output.append(build_rows(global_stats["lines_by_user"].most_common(10), "Nick", "Lines"))
     output.append("</table>")
+    output.append("</section>")
 
     # Wordiest users
+    output.append("<section id='wordiest-users'>")
     output.append("<h2>Wordiest Users</h2>")
     output.append("<table>")
     output.append(build_rows(global_stats["words_by_user"].most_common(10), "Nick", "Words"))
     output.append("</table>")
+    output.append("</section>")
 
     # Most mentioned (aggregate all mentions)
     aggregate_mentions = Counter()
     for user, mentions in global_stats["mentions_by_user"].items():
         aggregate_mentions.update(mentions)
 
+    output.append("<section id='most-mentioned'>")
     output.append("<h2>Most Mentioned (by all users)</h2>")
     output.append("<table>")
     output.append(build_rows(aggregate_mentions.most_common(10), "Nick", "Mentions"))
     output.append("</table>")
+    output.append("</section>")
 
     # Most referenced URLs
+    output.append("<section id='top-urls'>")
     output.append("<h2>Most Referenced URLs</h2>")
     output.append("<table>")
     output.append(build_rows(global_stats["url_counts"].most_common(10), "URL", "Count"))
     output.append("</table>")
+    output.append("</section>")
 
     # Latest topics
+    output.append("<section id='latest-topics'>")
     output.append("<h2>Latest Topics</h2>")
     output.append("<ul>")
     latest_topics = sorted(global_stats["topics"], key=lambda x: x["time"], reverse=True)[:5]
@@ -356,19 +373,24 @@ def write_html_report(global_stats, output_path):
             f"<li><strong>{html.escape(topic['time'])}</strong> by <em>{html.escape(topic['setter'])}</em>: {html.escape(topic['topic'])}</li>"
         )
     output.append("</ul>")
+    output.append("</section>")
 
     # Activity by hour
+    output.append("<section id='activity-by-hour'>")
     output.append("<h2>Activity by Hour</h2>")
     output.append("<table><tr><th>Hour</th><th>Messages</th></tr>")
     for hour in range(24):
         count = global_stats["hours_active"].get(hour, 0)
         output.append(f"<tr><td>{hour:02d}:00</td><td>{count}</td></tr>")
     output.append("</table>")
+    output.append("</section>")
 
     # Detailed nick stats table
+    output.append("<section id='nick-details'>")
     write_detailed_nick_stats(global_stats, output)
+    output.append("</section>")
 
-    output.append("</body></html>")
+    output.append("</main></body></html>")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(output))
