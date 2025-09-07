@@ -31,8 +31,11 @@ LOG_MODE_RE_OLD = re.compile(
 LOG_MODE_RE_NEW = re.compile(
     r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\*\*\s(?P<setter>\S+) sets mode (?P<mode>[+-]o) (?P<target>\S+)"
 )
-TOPIC_SET_RE = re.compile(
+TOPIC_SET_RE_OLD = re.compile(
     r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<setter>\S+)\sset the topic to\s\[(?P<topic>.+)\]$"
+)
+TOPIC_SET_RE_NEW = re.compile(
+    r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\s(?P<setter>\S+)\sset the topic to\s\[(?P<topic>.+)\]$"
 )
 URL_RE = re.compile(r"(https?://\S+)")
 SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
@@ -110,17 +113,6 @@ def parse_line(line, current_date=None):
         msg = m.group("msg")
         return dt, nick, msg
 
-    # Topic line example
-    m = TOPIC_SET_RE.match(line)
-    if m:
-        dt_str = m.group("timestamp")
-        try:
-            dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return None, None, None
-        setter = m.group("setter").lower()
-        topic = m.group("topic")
-        return dt, setter, topic  # special case for topic
     return None, None, None
 
 
@@ -166,6 +158,9 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
                 # parse_line should return (datetime, nick, message)
                 dt, nick, msg = parse_line(line, date_part)
                 if not nick:
+                    m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
+                    if m:
+                        known.add(m.group("setter").lower())
                     continue
                 nick, msg = handle_bridge(nick, msg)
                 if not nick:
@@ -234,6 +229,24 @@ def parse_log_file_with_nicks(log_file, known_nicks):
         for raw_line in f:
             line = raw_line.rstrip("\n")
 
+            m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
+            if m:
+                dt_str = m.group("timestamp")
+                try:
+                    if len(dt_str) == 8:
+                        dt_time = datetime.datetime.strptime(dt_str, "%H:%M:%S").time()
+                        dt = datetime.datetime.combine(current_date, dt_time) if current_date else None
+                    else:
+                        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    continue
+                if dt is None:
+                    continue
+                setter = m.group("setter").lower()
+                topic = m.group("topic")
+                topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
+                continue
+
             m = LOG_KICK_RE_OLD.match(line) or LOG_KICK_RE_NEW.match(line)
             if m:
                 dt_str = m.group("timestamp")
@@ -286,16 +299,6 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 dt, nick, msg = parse_line(line, current_date)
                 is_action = False
             if dt is None or not nick:
-                # check for topic set (special)
-                m = TOPIC_SET_RE.match(line)
-                if m:
-                    try:
-                        dt = datetime.datetime.strptime(m.group("timestamp"), "%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        continue
-                    setter = m.group("setter").lower()
-                    topic = m.group("topic")
-                    topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
                 continue
 
             nick, msg = handle_bridge(nick, msg)
