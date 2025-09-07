@@ -6,6 +6,8 @@ import time
 import datetime
 import json
 import random
+import os
+import unicodedata
 from pathlib import Path
 from collections import defaultdict, Counter
 import html
@@ -19,9 +21,36 @@ TOPIC_SET_RE = re.compile(
 URL_RE = re.compile(r"(https?://\S+)")
 SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
 
+BRIDGE_NICKS = {
+    n.strip().lower()
+    for n in os.environ.get("BRIDGENICKS", "").split(",")
+    if n.strip()
+}
+BRIDGE_MSG_RE = re.compile(r"^(?:\d*)?<@?([^>]+)>\s+(.+)$")
+
 CACHE_DIR = Path(".cache_ircstats")
 
 BLACKLIST = {"like", "shit", "the", "a", "you", "and", "to", "for", "of", "in", "on", "is", "it", "i", "we", "me", "my"}
+
+
+def clean_bridge_nick(nick):
+    nick = "".join(
+        ch for ch in nick if unicodedata.category(ch) != "Cf"
+    )
+    nick = re.sub(r"\s+", "_", nick)
+    nick = re.sub(r"[^a-zA-Z0-9_\-\[\]\\\^\{\}`|]+", "", nick)
+    return nick
+
+
+def handle_bridge(nick, msg):
+    if nick in BRIDGE_NICKS:
+        m = BRIDGE_MSG_RE.match(msg)
+        if not m:
+            return None, None
+        real_nick = clean_bridge_nick(m.group(1))
+        real_msg = m.group(2)
+        return real_nick.lower(), real_msg
+    return nick, msg
 
 
 def parse_line(line, current_date=None):
@@ -101,7 +130,12 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
             for line in f:
                 # parse_line should return (datetime, nick, message)
                 dt, nick, msg = parse_line(line, date_part)
-                if nick and is_valid_nick(nick):
+                if not nick:
+                    continue
+                nick, msg = handle_bridge(nick, msg)
+                if not nick:
+                    continue
+                if is_valid_nick(nick):
                     known.add(nick)
 
     with open(cache_path, "w", encoding="utf-8") as f:
@@ -136,6 +170,9 @@ def parse_log_file_with_nicks(log_file, known_nicks):
     url_counts = Counter()
     topics = []
     hours_active = Counter()
+    dow_active = Counter()
+    word_counts = Counter()
+    smiley_counts = Counter()
     total_lines = 0
 
     # Determine current_date for partial timestamp logs
@@ -159,6 +196,9 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                     topic = m.group("topic")
                     topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
                 continue
+            if not nick:
+                continue
+            nick, msg = handle_bridge(nick, msg)
             if not nick:
                 continue
 
@@ -347,6 +387,7 @@ def write_html_report(global_stats, output_path):
     output.append(
         "<header><h1>IRC Channel Statistics</h1>"
         "<nav>"
+        "<a href='#summary'>Summary</a> | "
         "<a href='#top-talkers'>Top Talkers</a> | "
         "<a href='#wordiest-users'>Wordiest Users</a> | "
         "<a href='#top-words'>Top Words</a> | "
@@ -361,11 +402,53 @@ def write_html_report(global_stats, output_path):
     )
     output.append("<main>")
 
+    total_lines = global_stats["total_lines"]
+    active_nicks = len(global_stats["lines_by_user"])
+    log_dates = global_stats.get("log_dates", set())
+    num_days = len(log_dates)
+    first_day = min(log_dates).strftime("%Y-%m-%d") if log_dates else ""
+    last_day = max(log_dates).strftime("%Y-%m-%d") if log_dates else ""
+    avg_per_day = total_lines / num_days if num_days else 0
+    most_active_day = ""
+    most_active_count = 0
+    if global_stats["dow_active"]:
+        idx, most_active_count = max(
+            global_stats["dow_active"].items(), key=lambda x: x[1]
+        )
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        most_active_day = days[idx]
+
+    output.append("<section id='summary'>")
+    output.append("<h2>Summary</h2>")
+    output.append("<ul>")
+    output.append(f"<li>Total lines: {total_lines}</li>")
+    if num_days:
+        output.append(
+            f"<li>From {first_day} to {last_day} ({num_days} days)</li>"
+        )
+        output.append(
+            f"<li>Average lines per day: {avg_per_day:.2f}</li>"
+        )
+    output.append(f"<li>Active nicks: {active_nicks}</li>")
+    if most_active_day:
+        output.append(
+            f"<li>Most active day: {most_active_day} ({most_active_count} lines)</li>"
+        )
+    output.append("</ul>")
+    output.append("</section>")
+
     # Top Talkers (lines)
     output.append("<section id='top-talkers'>")
     output.append("<h2>Top Talkers (Lines)</h2>")
+    top_talkers = global_stats["lines_by_user"].most_common(10)
+    max_lines = top_talkers[0][1] if top_talkers else 0
     output.append("<table>")
-    output.append(build_rows(global_stats["lines_by_user"].most_common(10), "Nick", "Lines"))
+    output.append("<tr><th>Nick</th><th>Lines</th><th></th></tr>")
+    for nick, lines in top_talkers:
+        width = (lines / max_lines * 100) if max_lines else 0
+        output.append(
+            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td><div style='background:#90caf9;height:10px;width:{width}%;'></div></td></tr>"
+        )
     output.append("</table>")
     output.append("</section>")
 
@@ -480,6 +563,7 @@ def main(log_dir):
         "total_lines": 0,
         "last_seen": {},
         "messages": defaultdict(list),
+        "log_dates": set(),
     }
 
     total_start = time.perf_counter()
@@ -489,6 +573,7 @@ def main(log_dir):
             file_date = datetime.datetime.strptime(log_file.stem, "%Y-%m-%d").date()
         except Exception:
             continue
+        global_stats["log_dates"].add(file_date)
 
         age_days = (today - file_date).days
 

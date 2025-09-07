@@ -9,9 +9,10 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 💬 Tracks topics, URLs, and Discord relays
 - 📝 Counts common words, smileys, and daily activity trends
 - 🚫 Filters non-nicks and common stopwords from mention stats
-- ⚡ Caches per-log results for fast reprocessing  
+- ⚡ Caches per-log results for fast reprocessing
 - 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI and full pisg-style sections
-- 🧠 Intelligent random quote selection and "last seen" summaries  
+- 🧠 Intelligent random quote selection and "last seen" summaries
+- 🔌 Bridge bot handling via `BRIDGENICKS` to rewrite relayed nicks
 
 ## Example Stats Output
 
@@ -35,6 +36,9 @@ cd pyircstats
 
 # Run it on your log directory
 python3 ircstats.py /path/to/your/logs/
+
+# with bridge bots (comma-separated)
+BRIDGENICKS=matrixbridge,discordbot python3 ircstats.py /path/to/your/logs/
 ```
 
 This will:
