@@ -357,7 +357,13 @@ def write_html_report(global_stats, output_path):
         return "\n".join(rows)
 
     def hour_to_color(hour):
-        return f"hsl({int(hour / 24 * 360)},70%,50%)"
+        if 0 <= hour < 6:
+            return "#1e88e5"  # blue
+        if 6 <= hour < 12:
+            return "#e53935"  # red
+        if 12 <= hour < 18:
+            return "#fdd835"  # yellow
+        return "#43a047"  # green
 
     output = []
 
@@ -444,29 +450,37 @@ def write_html_report(global_stats, output_path):
     output.append("</ul>")
     output.append("</section>")
 
-    # Top Talkers (lines)
-    output.append("<section id='top-talkers'>")
-    output.append("<h2>Top Talkers (Lines)</h2>")
+    # Most Active Nicks
+    output.append("<section id='most-active-nicks'>")
+    output.append("<h2>Most Active Nicks</h2>")
     top_talkers = global_stats["lines_by_user"].most_common(10)
     max_lines = top_talkers[0][1] if top_talkers else 0
     output.append("<table>")
-    output.append("<tr><th>Nick</th><th>Lines</th><th></th></tr>")
+    output.append(
+        "<tr><th>Nick</th><th>Lines</th><th>Words</th><th>Last seen</th><th>When?</th></tr>"
+    )
     for nick, lines in top_talkers:
         width = (lines / max_lines * 100) if max_lines else 0
         hours = global_stats["user_hour_active"].get(nick, {})
         peak_hour = max(hours, key=hours.get) if hours else 0
         color = hour_to_color(peak_hour)
+        line_bar = f"<div style='background:{color};height:10px;width:{width}%;'></div>"
+        words = global_stats["words_by_user"].get(nick, 0)
+        last_seen_dt = global_stats["last_seen"].get(nick)
+        last_seen_str = relative_day_string(last_seen_dt) if last_seen_dt else "unknown"
+        max_hour_count = max(hours.values()) if hours else 0
+        segments = []
+        for h in range(24):
+            cnt = hours.get(h, 0)
+            h_height = (cnt / max_hour_count * 10) if max_hour_count else 0
+            seg_color = hour_to_color(h)
+            segments.append(
+                f"<div style='display:inline-block;width:4px;height:{h_height}px;background:{seg_color}'></div>"
+            )
+        when_bar = f"<div style='height:10px'>{''.join(segments)}</div>"
         output.append(
-            f"<tr><td>{html.escape(nick)}</td><td>{lines}</td><td><div style='background:{color};height:10px;width:{width}%;'></div></td></tr>"
+            f"<tr><td>{html.escape(nick)}</td><td>{lines}{line_bar}</td><td>{words}</td><td>{last_seen_str}</td><td>{when_bar}</td></tr>"
         )
-    output.append("</table>")
-    output.append("</section>")
-
-    # Wordiest users
-    output.append("<section id='wordiest-users'>")
-    output.append("<h2>Wordiest Users</h2>")
-    output.append("<table>")
-    output.append(build_rows(global_stats["words_by_user"].most_common(10), "Nick", "Words"))
     output.append("</table>")
     output.append("</section>")
 
@@ -481,7 +495,9 @@ def write_html_report(global_stats, output_path):
     # Most mentioned (aggregate all mentions)
     aggregate_mentions = Counter()
     for user, mentions in global_stats["mentions_by_user"].items():
-        aggregate_mentions.update(mentions)
+        for nick, cnt in mentions.items():
+            if nick in global_stats["lines_by_user"]:
+                aggregate_mentions[nick] += cnt
 
     output.append("<section id='most-mentioned'>")
     output.append("<h2>Most Mentioned (by all users)</h2>")
@@ -494,7 +510,12 @@ def write_html_report(global_stats, output_path):
     output.append("<section id='top-urls'>")
     output.append("<h2>Most Referenced URLs</h2>")
     output.append("<table>")
-    output.append(build_rows(global_stats["url_counts"].most_common(10), "URL", "Count"))
+    top_urls = [
+        (url, c)
+        for url, c in global_stats["url_counts"].most_common()
+        if c >= 2
+    ][:10]
+    output.append(build_rows(top_urls, "URL", "Count"))
     output.append("</table>")
     output.append("</section>")
 
