@@ -43,6 +43,23 @@ This will:
 - Generate or update per-log JSON caches
 - Output a `index.html` file with aggregated stats
 
+## Docker
+
+Prebuilt images are available via GitHub Container Registry.
+
+### Latest release
+
+```bash
+docker pull ghcr.io/youruser/pyircstats:latest
+docker run --rm -v /path/to/logs:/logs ghcr.io/youruser/pyircstats:latest /logs
+```
+
+### Development build
+
+```bash
+docker pull ghcr.io/youruser/pyircstats:develop
+```
+
 ## File Structure
 
 Logs should be named as `YYYY-MM-DD.log`, e.g.:
@@ -65,7 +82,6 @@ Supported formats include:
 - Export CSV/JSON summaries
 - Per-user stat pages
 - Tagging known bots
-- Docker support
 
 ## License
 
