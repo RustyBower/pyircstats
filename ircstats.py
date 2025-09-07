@@ -314,6 +314,9 @@ def load_cache(log_file):
             user: Counter({int(h): c for h, c in hours.items()})
             for user, hours in raw.get("user_hour_active", {}).items()
         }
+        # Ensure hourly and weekday activity use integer keys
+        raw["hours_active"] = Counter({int(h): c for h, c in raw.get("hours_active", {}).items()})
+        raw["dow_active"] = Counter({int(d): c for d, c in raw.get("dow_active", {}).items()})
         return raw
     except Exception:
         return None
@@ -429,7 +432,7 @@ def write_html_report(global_stats, output_path):
             global_stats["dow_active"].items(), key=lambda x: x[1]
         )
         days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        most_active_day = days[idx]
+        most_active_day = days[int(idx)]
 
     output.append("<section id='summary'>")
     output.append("<h2>Summary</h2>")
