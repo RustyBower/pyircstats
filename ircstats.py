@@ -32,10 +32,10 @@ LOG_MODE_RE_NEW = re.compile(
     r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\*\*\s(?P<setter>\S+) sets mode (?P<mode>[+-]o) (?P<target>\S+)"
 )
 TOPIC_SET_RE_OLD = re.compile(
-    r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<setter>\S+)\sset the topic to\s\[(?P<topic>.+)\]$"
+    r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<setter>\S+)\sset the topic to\s(?P<topic>.+)$"
 )
 TOPIC_SET_RE_NEW = re.compile(
-    r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\s(?P<setter>\S+)\sset the topic to\s\[(?P<topic>.+)\]$"
+    r"^\[(?P<timestamp>\d{2}:\d{2}:\d{2})\]\s\*\s(?P<setter>\S+)\sset the topic to\s(?P<topic>.+)$"
 )
 URL_RE = re.compile(r"(https?://\S+)")
 SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
@@ -423,7 +423,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 setter = canonical_nick(m.group("setter").lower())
                 if setter in BOT_NICKS:
                     continue
-                topic = m.group("topic")
+                topic = m.group("topic").strip()
                 topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
                 continue
 
