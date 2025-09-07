@@ -38,6 +38,22 @@ URL_RE = re.compile(r"(https?://\S+)")
 SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
 BAD_WORDS = {"fuck", "shit", "damn", "bitch", "crap", "ass", "piss", "dick", "cunt"}
 
+try:
+    from profanity_check import predict as profanity_predict
+except Exception:  # pragma: no cover - optional dependency
+    profanity_predict = None
+
+_PROFANITY_CACHE = {}
+
+
+def is_profane(word: str) -> bool:
+    word = word.lower()
+    if profanity_predict:
+        if word not in _PROFANITY_CACHE:
+            _PROFANITY_CACHE[word] = bool(profanity_predict([word])[0])
+        return _PROFANITY_CACHE[word]
+    return word in BAD_WORDS
+
 BRIDGE_NICKS = {
     n.strip().lower()
     for n in os.environ.get("BRIDGENICKS", "").split(",")
@@ -306,7 +322,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 if wclean and wclean.isalpha():
                     word_counts[wclean] += 1
                     word_last_used[wclean] = (dt, nick)
-                if wclean in BAD_WORDS:
+                if is_profane(wclean):
                     bad_word_counts[nick] += 1
 
             for url in URL_RE.findall(msg):
