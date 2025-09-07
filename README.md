@@ -8,7 +8,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 🔎 Extracts nick activity, mentions, quotes, and last seen  
 - 💬 Tracks topics, URLs, and Discord relays
 - 📝 Counts common words, smileys, and daily activity trends, showing who last used top words and who last mentioned each nick
-- 🚫 Filters non-nicks and common stopwords from mention stats
+- 🚫 Skips common stop words like "the" and "and" in top-word stats (extend via `IGNOREWORDS`)
 - ⚡ Caches per-log results for fast reprocessing
 - 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI, centered summary header, and color-coded activity charts
 - ⏱️ Shows overall hourly activity and stacked per-user bars to visualize when conversations happen
@@ -42,6 +42,9 @@ python3 ircstats.py /path/to/your/logs/
 
 # with bridge bots (comma-separated)
 BRIDGENICKS=matrixbridge,discordbot python3 ircstats.py /path/to/your/logs/
+
+# ignore additional common words
+IGNOREWORDS=foo,bar python3 ircstats.py /path/to/your/logs/
 ```
 
 This will:

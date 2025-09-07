@@ -41,6 +41,152 @@ URL_RE = re.compile(r"(https?://\S+)")
 SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
 BAD_WORDS = {"fuck", "shit", "damn", "bitch", "crap", "ass", "piss", "dick", "cunt"}
 
+# Common stop words to ignore when tallying most used words
+STOP_WORDS = {
+    "a",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "all",
+    "am",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "below",
+    "between",
+    "both",
+    "but",
+    "by",
+    "can",
+    "cant",
+    "could",
+    "couldnt",
+    "did",
+    "didnt",
+    "do",
+    "does",
+    "doesnt",
+    "doing",
+    "dont",
+    "down",
+    "during",
+    "each",
+    "few",
+    "for",
+    "from",
+    "further",
+    "had",
+    "hadnt",
+    "has",
+    "hasnt",
+    "have",
+    "havent",
+    "having",
+    "he",
+    "her",
+    "here",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "i",
+    "if",
+    "im",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "itself",
+    "just",
+    "me",
+    "more",
+    "most",
+    "my",
+    "myself",
+    "no",
+    "nor",
+    "not",
+    "now",
+    "of",
+    "off",
+    "on",
+    "once",
+    "only",
+    "or",
+    "other",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "same",
+    "she",
+    "should",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "to",
+    "too",
+    "under",
+    "until",
+    "up",
+    "very",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whom",
+    "why",
+    "will",
+    "with",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
+}
+
+STOP_WORDS.update(
+    {
+        w.strip().lower()
+        for w in os.environ.get("IGNOREWORDS", "").split(",")
+        if w.strip()
+    }
+)
+
 try:
     from profanity_check import predict as profanity_predict
 except Exception:  # pragma: no cover - optional dependency
@@ -319,14 +465,17 @@ def parse_log_file_with_nicks(log_file, known_nicks):
 
             for word in words:
                 wclean = word.lower().strip(",.:;!?()[]{}<>\"'")
+                if not wclean:
+                    continue
                 if wclean in known_nicks and wclean != nick:
                     mentions_by_user[nick][wclean] += 1
                     mention_last_by[wclean] = (dt, nick)
-                if wclean and wclean.isalpha():
-                    word_counts[wclean] += 1
-                    word_last_used[wclean] = (dt, nick)
-                if is_profane(wclean):
-                    bad_word_counts[nick] += 1
+                if wclean.isalpha():
+                    if wclean not in STOP_WORDS:
+                        word_counts[wclean] += 1
+                        word_last_used[wclean] = (dt, nick)
+                    if is_profane(wclean):
+                        bad_word_counts[nick] += 1
 
             for url in URL_RE.findall(msg):
                 url_counts[url] += 1
@@ -515,6 +664,18 @@ def load_cache(log_file):
         raw["mention_last_by"] = {
             w: (datetime.datetime.fromisoformat(v["time"]), v["nick"])
             for w, v in raw.get("mention_last_by", {}).items()
+        }
+        raw["word_counts"] = Counter(
+            {
+                w: c
+                for w, c in raw.get("word_counts", {}).items()
+                if w not in STOP_WORDS
+            }
+        )
+        raw["word_last_used"] = {
+            w: v
+            for w, v in raw.get("word_last_used", {}).items()
+            if w not in STOP_WORDS
         }
         for k in [
             "kicks_received",
