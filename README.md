@@ -6,10 +6,11 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 
 - 📅 Parses daily `.log` files in ZNC or EnergyMech format  
 - 🔎 Extracts nick activity, mentions, quotes, and last seen  
-- 💬 Tracks topics, URLs, and Discord relays  
-- 🚫 Filters non-nicks and common stopwords from mention stats  
+- 💬 Tracks topics, URLs, and Discord relays
+- 📝 Counts common words, smileys, and daily activity trends
+- 🚫 Filters non-nicks and common stopwords from mention stats
 - ⚡ Caches per-log results for fast reprocessing  
-- 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI
+- 🌐 Generates a clean, single-file HTML report (`index.html`) with a modern, pisg-inspired UI and full pisg-style sections
 - 🧠 Intelligent random quote selection and "last seen" summaries  
 
 ## Example Stats Output

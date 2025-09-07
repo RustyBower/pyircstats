@@ -17,6 +17,7 @@ TOPIC_SET_RE = re.compile(
     r"^\[(?P<timestamp>[\d:-]+\s[\d:]+)\]\s\*\s(?P<setter>\S+)\sset the topic to\s\[(?P<topic>.+)\]$"
 )
 URL_RE = re.compile(r"(https?://\S+)")
+SMILEY_RE = re.compile(r"[:;][\-^]?[\)D\(Pp]")
 
 CACHE_DIR = Path(".cache_ircstats")
 
@@ -173,17 +174,24 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 messages_by_user[nick].pop(0)
             messages_by_user[nick].append(msg)
 
-            # Extract mentions (simple approach: word matches known nick)
+            # Extract mentions and word usage
             for word in msg.split():
                 wclean = word.lower().strip(",.:;!?()[]{}<>\"'")
                 if wclean in known_nicks and wclean != nick:
                     mentions_by_user[nick][wclean] += 1
+                if wclean and wclean not in BLACKLIST and wclean.isalpha():
+                    word_counts[wclean] += 1
 
             # Extract URLs
             for url in URL_RE.findall(msg):
                 url_counts[url] += 1
 
+            # Smiley counts
+            for sm in SMILEY_RE.findall(msg):
+                smiley_counts[sm] += 1
+
             hours_active[dt.hour] += 1
+            dow_active[dt.weekday()] += 1
 
     return {
         "lines_by_user": lines_by_user,
@@ -192,6 +200,9 @@ def parse_log_file_with_nicks(log_file, known_nicks):
         "url_counts": url_counts,
         "topics": topics,
         "hours_active": hours_active,
+        "dow_active": dow_active,
+        "word_counts": word_counts,
+        "smiley_counts": smiley_counts,
         "total_lines": total_lines,
         "last_seen": last_seen_by_user,
         "messages": messages_by_user,
@@ -199,8 +210,17 @@ def parse_log_file_with_nicks(log_file, known_nicks):
 
 
 def merge_stats(global_stats, file_stats):
-    for k in ["lines_by_user", "words_by_user", "url_counts", "hours_active"]:
-        global_stats[k].update(file_stats[k])
+    for k in [
+        "lines_by_user",
+        "words_by_user",
+        "url_counts",
+        "hours_active",
+        "dow_active",
+        "word_counts",
+        "smiley_counts",
+    ]:
+        if k in file_stats:
+            global_stats[k].update(file_stats[k])
     # merge mentions
     for user, mentions in file_stats["mentions_by_user"].items():
         global_stats["mentions_by_user"][user].update(mentions)
@@ -324,7 +344,21 @@ def write_html_report(global_stats, output_path):
     """
     )
     output.append("</head><body>")
-    output.append("<header><h1>IRC Channel Statistics</h1>" "<nav>" "<a href='#top-talkers'>Top Talkers</a> | " "<a href='#wordiest-users'>Wordiest Users</a> | " "<a href='#most-mentioned'>Most Mentioned</a> | " "<a href='#top-urls'>Top URLs</a> | " "<a href='#latest-topics'>Topics</a> | " "<a href='#activity-by-hour'>Activity</a> | " "<a href='#nick-details'>Nick Stats</a>" "</nav></header>")
+    output.append(
+        "<header><h1>IRC Channel Statistics</h1>"
+        "<nav>"
+        "<a href='#top-talkers'>Top Talkers</a> | "
+        "<a href='#wordiest-users'>Wordiest Users</a> | "
+        "<a href='#top-words'>Top Words</a> | "
+        "<a href='#most-mentioned'>Most Mentioned</a> | "
+        "<a href='#top-urls'>Top URLs</a> | "
+        "<a href='#smiley-stats'>Smileys</a> | "
+        "<a href='#latest-topics'>Topics</a> | "
+        "<a href='#activity-by-hour'>Hourly Activity</a> | "
+        "<a href='#activity-by-day'>Daily Activity</a> | "
+        "<a href='#nick-details'>Nick Stats</a>"
+        "</nav></header>"
+    )
     output.append("<main>")
 
     # Top Talkers (lines)
@@ -340,6 +374,14 @@ def write_html_report(global_stats, output_path):
     output.append("<h2>Wordiest Users</h2>")
     output.append("<table>")
     output.append(build_rows(global_stats["words_by_user"].most_common(10), "Nick", "Words"))
+    output.append("</table>")
+    output.append("</section>")
+
+    # Most used words
+    output.append("<section id='top-words'>")
+    output.append("<h2>Most Used Words</h2>")
+    output.append("<table>")
+    output.append(build_rows(global_stats["word_counts"].most_common(10), "Word", "Count"))
     output.append("</table>")
     output.append("</section>")
 
@@ -363,6 +405,14 @@ def write_html_report(global_stats, output_path):
     output.append("</table>")
     output.append("</section>")
 
+    # Smiley stats
+    output.append("<section id='smiley-stats'>")
+    output.append("<h2>Smileys</h2>")
+    output.append("<table>")
+    output.append(build_rows(global_stats["smiley_counts"].most_common(10), "Smiley", "Count"))
+    output.append("</table>")
+    output.append("</section>")
+
     # Latest topics
     output.append("<section id='latest-topics'>")
     output.append("<h2>Latest Topics</h2>")
@@ -382,6 +432,17 @@ def write_html_report(global_stats, output_path):
     for hour in range(24):
         count = global_stats["hours_active"].get(hour, 0)
         output.append(f"<tr><td>{hour:02d}:00</td><td>{count}</td></tr>")
+    output.append("</table>")
+    output.append("</section>")
+
+    # Activity by day
+    output.append("<section id='activity-by-day'>")
+    output.append("<h2>Activity by Day</h2>")
+    output.append("<table><tr><th>Day</th><th>Messages</th></tr>")
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for i, day in enumerate(days):
+        count = global_stats["dow_active"].get(i, 0)
+        output.append(f"<tr><td>{day}</td><td>{count}</td></tr>")
     output.append("</table>")
     output.append("</section>")
 
@@ -413,6 +474,9 @@ def main(log_dir):
         "url_counts": Counter(),
         "topics": [],
         "hours_active": Counter(),
+        "dow_active": Counter(),
+        "word_counts": Counter(),
+        "smiley_counts": Counter(),
         "total_lines": 0,
         "last_seen": {},
         "messages": defaultdict(list),
