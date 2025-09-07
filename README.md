@@ -18,6 +18,7 @@ A fast, modern IRC channel log analyzer written in Python. Inspired by `pisg`, b
 - 🔁 Merge alternate nick spellings via `NICKALIASES` so renamed users share stats
 - 🔢 "Other interesting numbers" section for kicks, joins, ops, monologues, and profanity, plus a stats footer with total lines and generation time (action counts only include `/me` commands)
 - 🤬 Optional [`profanity-check`](https://pypi.org/project/profanity-check/) integration for smarter foul-language stats
+- ⚙️ Optional config file (`pisg`-style) to define bot lists, nick aliases, genders, ignored nicks, bridge bots, and extra stop words
 
 ## Example Stats Output
 
@@ -42,6 +43,9 @@ cd pyircstats
 # Run it on your log directory
 python3 ircstats.py /path/to/your/logs/
 
+# or provide a config file with bot lists, aliases, genders, etc.
+python3 ircstats.py /path/to/your/logs/ myconfig.cfg
+
 # with bridge bots (comma-separated)
 BRIDGENICKS=matrixbridge,discordbot python3 ircstats.py /path/to/your/logs/
 
@@ -53,6 +57,31 @@ IGNOREWORDS=foo,bar python3 ircstats.py /path/to/your/logs/
 
 # merge nick aliases
 NICKALIASES=rc=rustycloud,rusty_=rustycloud python3 ircstats.py /path/to/your/logs/
+```
+
+### Sample config file
+
+```ini
+[bots]
+nicks = ChanServ,SomeBot
+
+[aliases]
+rc = rustycloud
+rusty_ = rustycloud
+
+[ignore]
+nicks = badguy,spammer
+
+[ignorewords]
+words = foo,bar
+
+[bridge]
+nicks = matrixbridge,discordbot
+
+[users]
+rustycloud = male
+alice = female
+somebot = bot
 ```
 
 This will:

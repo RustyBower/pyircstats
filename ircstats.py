@@ -226,6 +226,72 @@ for pair in os.environ.get("NICKALIASES", "").split(","):
             NICK_ALIASES[alias] = canonical
 
 
+IGNORE_NICKS = {
+    n.strip().lower()
+    for n in os.environ.get("IGNORNICKS", "").split(",")
+    if n.strip()
+}
+
+NICK_GENDERS = {}
+
+
+def load_config(cfg_path: str) -> None:
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.read(cfg_path)
+    if cfg.has_section("bots"):
+        BOT_NICKS.update(
+            n.strip().lower()
+            for n in cfg.get("bots", "nicks", fallback="").split(",")
+            if n.strip()
+        )
+    if cfg.has_section("aliases"):
+        for alias, canonical in cfg.items("aliases"):
+            alias = alias.strip().lower()
+            canonical = canonical.strip().lower()
+            if alias and canonical:
+                NICK_ALIASES[alias] = canonical
+    if cfg.has_section("ignore"):
+        IGNORE_NICKS.update(
+            n.strip().lower()
+            for n in cfg.get("ignore", "nicks", fallback="").split(",")
+            if n.strip()
+        )
+    if cfg.has_section("ignorewords"):
+        STOP_WORDS.update(
+            w.strip().lower()
+            for w in cfg.get("ignorewords", "words", fallback="").split(",")
+            if w.strip()
+        )
+    if cfg.has_section("bridge"):
+        BRIDGE_NICKS.update(
+            n.strip().lower()
+            for n in cfg.get("bridge", "nicks", fallback="").split(",")
+            if n.strip()
+        )
+    if cfg.has_section("users"):
+        for nick, gender in cfg.items("users"):
+            nick = nick.strip().lower()
+            g = gender.strip().lower()
+            NICK_GENDERS[nick] = g
+            if g == "bot":
+                BOT_NICKS.add(nick)
+
+
+GENDER_PRONOUNS = {
+    "male": {"subj": "he", "obj": "him", "poss": "his", "ref": "himself", "be": "he's"},
+    "female": {"subj": "she", "obj": "her", "poss": "her", "ref": "herself", "be": "she's"},
+    "bot": {"subj": "it", "obj": "it", "poss": "its", "ref": "itself", "be": "it's"},
+    "unknown": {"subj": "they", "obj": "them", "poss": "their", "ref": "themselves", "be": "they're"},
+}
+
+
+def pronoun(nick: str, form: str) -> str:
+    gender = NICK_GENDERS.get(nick, "unknown")
+    return GENDER_PRONOUNS.get(gender, GENDER_PRONOUNS["unknown"])[form]
+
+
 def canonical_nick(nick: str) -> str:
     return NICK_ALIASES.get(nick.lower(), nick.lower())
 
@@ -306,14 +372,21 @@ def hour_to_color(hour):
 def build_known_nicks(log_dir, cache_file="known_nicks.json"):
     cache_path = Path(cache_file)
     alias_sig = dict(sorted(NICK_ALIASES.items()))
+    bot_sig = sorted(BOT_NICKS)
+    ignore_sig = sorted(IGNORE_NICKS)
     if cache_path.exists():
         with open(cache_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict) and data.get("aliases") == alias_sig:
+        if (
+            isinstance(data, dict)
+            and data.get("aliases") == alias_sig
+            and data.get("bots") == bot_sig
+            and data.get("ignore") == ignore_sig
+        ):
             known = set(data.get("nicks", []))
             print(f"Loaded {len(known)} known nicks from cache.")
             return known
-        elif isinstance(data, list) and not NICK_ALIASES:
+        elif isinstance(data, list) and not NICK_ALIASES and not BOT_NICKS and not IGNORE_NICKS:
             known = set(data)
             print(f"Loaded {len(known)} known nicks from cache.")
             return known
@@ -333,7 +406,7 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
                     m = TOPIC_SET_RE_OLD.match(line) or TOPIC_SET_RE_NEW.match(line)
                     if m:
                         setter = canonical_nick(m.group("setter").lower())
-                        if setter in BOT_NICKS:
+                        if setter in BOT_NICKS or setter in IGNORE_NICKS:
                             continue
                         known.add(setter)
                     continue
@@ -341,12 +414,21 @@ def build_known_nicks(log_dir, cache_file="known_nicks.json"):
                 if not nick:
                     continue
                 nick = canonical_nick(nick)
-                if nick in BOT_NICKS:
+                if nick in BOT_NICKS or nick in IGNORE_NICKS:
                     continue
                 known.add(nick)
 
     with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump({"nicks": sorted(known), "aliases": alias_sig}, f, indent=2)
+        json.dump(
+            {
+                "nicks": sorted(known),
+                "aliases": alias_sig,
+                "bots": bot_sig,
+                "ignore": ignore_sig,
+            },
+            f,
+            indent=2,
+        )
     print(f"Built known nicks list with {len(known)} entries and cached to {cache_path}")
     return known
 
@@ -421,7 +503,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 if dt is None:
                     continue
                 setter = canonical_nick(m.group("setter").lower())
-                if setter in BOT_NICKS:
+                if setter in BOT_NICKS or setter in IGNORE_NICKS:
                     continue
                 topic = m.group("topic").strip()
                 topics.append({"time": dt.strftime("%Y-%m-%d %H:%M:%S"), "setter": setter, "topic": topic})
@@ -440,7 +522,12 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                     dt = None
                 victim = canonical_nick(m.group("victim").lower())
                 kicker = canonical_nick(m.group("kicker").lower())
-                if victim in BOT_NICKS or kicker in BOT_NICKS:
+                if (
+                    victim in BOT_NICKS
+                    or kicker in BOT_NICKS
+                    or victim in IGNORE_NICKS
+                    or kicker in IGNORE_NICKS
+                ):
                     continue
                 kicks_received[victim] += 1
                 kicks_given[kicker] += 1
@@ -451,7 +538,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
             m = LOG_JOIN_RE_OLD.match(line) or LOG_JOIN_RE_NEW.match(line)
             if m:
                 nick = canonical_nick(m.group("nick").lower())
-                if nick in BOT_NICKS:
+                if nick in BOT_NICKS or nick in IGNORE_NICKS:
                     continue
                 joins[nick] += 1
                 continue
@@ -460,7 +547,12 @@ def parse_log_file_with_nicks(log_file, known_nicks):
             if m:
                 setter = canonical_nick(m.group("setter").lower())
                 target = canonical_nick(m.group("target").lower())
-                if setter in BOT_NICKS or target in BOT_NICKS:
+                if (
+                    setter in BOT_NICKS
+                    or target in BOT_NICKS
+                    or setter in IGNORE_NICKS
+                    or target in IGNORE_NICKS
+                ):
                     continue
                 mode = m.group("mode")
                 if mode == "+o":
@@ -493,7 +585,7 @@ def parse_log_file_with_nicks(log_file, known_nicks):
             if not nick:
                 continue
             nick = canonical_nick(nick)
-            if nick in BOT_NICKS:
+            if nick in BOT_NICKS or nick in IGNORE_NICKS:
                 continue
 
             total_lines += 1
@@ -513,6 +605,8 @@ def parse_log_file_with_nicks(log_file, known_nicks):
                 if not wclean:
                     continue
                 wnick = canonical_nick(wclean)
+                if wnick in IGNORE_NICKS or wnick in BOT_NICKS:
+                    continue
                 if wnick in known_nicks and wnick != nick:
                     mentions_by_user[nick][wnick] += 1
                     mention_last_by[wnick] = (dt, nick)
@@ -683,6 +777,9 @@ def save_cache(log_file, data):
     serialized["total_lines"] = data["total_lines"]
     serialized["bot_nicks"] = sorted(BOT_NICKS)
     serialized["nick_aliases"] = dict(sorted(NICK_ALIASES.items()))
+    serialized["bridge_nicks"] = sorted(BRIDGE_NICKS)
+    serialized["ignore_nicks"] = sorted(IGNORE_NICKS)
+    serialized["stop_words"] = sorted(STOP_WORDS)
 
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(serialized, f, indent=1)
@@ -699,8 +796,17 @@ def load_cache(log_file, known_nicks):
             return None
         if raw.get("nick_aliases", {}) != dict(sorted(NICK_ALIASES.items())):
             return None
+        if set(raw.get("bridge_nicks", [])) != BRIDGE_NICKS:
+            return None
+        if set(raw.get("ignore_nicks", [])) != IGNORE_NICKS:
+            return None
+        if set(raw.get("stop_words", [])) != STOP_WORDS:
+            return None
         raw.pop("bot_nicks", None)
         raw.pop("nick_aliases", None)
+        raw.pop("bridge_nicks", None)
+        raw.pop("ignore_nicks", None)
+        raw.pop("stop_words", None)
         # Deserialize last_seen timestamps
         raw["last_seen"] = {k: datetime.datetime.fromisoformat(v) for k, v in raw.get("last_seen", {}).items()}
         # Convert per-user hour maps back to Counters
@@ -1030,7 +1136,10 @@ def write_other_numbers(global_stats, output, channel):
         act1, cnt1 = actions.most_common(1)[0]
         example = global_stats.get("action_examples", {}).get(act1)
         stats.append(
-            (f"{act1} always lets us know what they're doing: {cnt1} actions!", example)
+            (
+                f"{act1} always lets us know what {pronoun(act1,'be')} doing: {cnt1} actions!",
+                example,
+            )
         )
         if len(actions) > 1:
             act2, cnt2 = actions.most_common(2)[1]
@@ -1043,7 +1152,7 @@ def write_other_numbers(global_stats, output, channel):
         mono1, mc1 = monologues.most_common(1)[0]
         stats.append(
             (
-                f"{mono1} talks to themselves a lot. They wrote over 5 lines in a row {mc1} times!",
+                f"{mono1} talks to {pronoun(mono1,'ref')} a lot. {pronoun(mono1,'subj').capitalize()} wrote over 5 lines in a row {mc1} times!",
                 None,
             )
         )
@@ -1202,6 +1311,9 @@ def main(log_dir):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} /path/to/logdir")
+        print(f"Usage: {sys.argv[0]} /path/to/logdir [config.cfg]")
         sys.exit(1)
+    cfg = sys.argv[2] if len(sys.argv) > 2 else None
+    if cfg:
+        load_config(cfg)
     main(sys.argv[1])
